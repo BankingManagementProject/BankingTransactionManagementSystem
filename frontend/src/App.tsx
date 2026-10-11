@@ -4,9 +4,13 @@ type Row=Record<string,any>;
 const money=(v:any)=>new Intl.NumberFormat('en-IN',{style:'currency',currency:'INR',maximumFractionDigits:2}).format(Number(v||0));
 const statusClass=(s:string)=>'status '+(s||'').toLowerCase().replaceAll('_','-');
 export default function App(){
- const googleClientId=(import.meta as any).env?.VITE_GOOGLE_CLIENT_ID||'';
- const [authToken,setAuthToken]=useState(()=>localStorage.getItem('northstar_token')||''); const [user,setUser]=useState<Row|null>(()=>{try{return JSON.parse(localStorage.getItem('northstar_user')||'null')}catch{return null}}); const [authMode,setAuthMode]=useState<'LOGIN'|'REGISTER'|'BOOTSTRAP'|'VERIFY'>('LOGIN'); const [authForm,setAuthForm]=useState({fullName:'',email:'',password:'',bootstrapSecret:''}); const [authError,setAuthError]=useState(''); const [authMessage,setAuthMessage]=useState(''); const [authBusy,setAuthBusy]=useState(false); const [staffForm,setStaffForm]=useState({fullName:'',email:'',password:'',role:'EMPLOYEE',branchName:'Main Branch'}); const [verificationOtp,setVerificationOtp]=useState(''); const [transferOtp,setTransferOtp]=useState(''); const [transferOtpSent,setTransferOtpSent]=useState(false); const [fdForm,setFdForm]=useState({accountId:'',amount:'',tenureMonths:'12'}); const [loanForm,setLoanForm]=useState({accountId:'',amount:'',purpose:'',monthlyIncome:''}); const [fixedDeposits,setFixedDeposits]=useState<Row[]>([]); const [loans,setLoans]=useState<Row[]>([]); const role=String(user?.role||'CUSTOMER'); const [tab,setTab]=useState('Overview'); const [accounts,setAccounts]=useState<Row[]>([]); const [apps,setApps]=useState<Row[]>([]); const [txns,setTxns]=useState<Row[]>([]); const [events,setEvents]=useState<Row[]>([]); const [selected,setSelected]=useState<Row|null>(null); const [summary,setSummary]=useState<Row>({}); const [notice,setNotice]=useState(''); const [error,setError]=useState(''); const [busy,setBusy]=useState(false);
- const [deposit,setDeposit]=useState({accountId:'',amount:'',description:''}); const [application,setApplication]=useState({accountType:'SAVINGS',initialDeposit:'',phone:'',dateOfBirth:'',address:'',occupation:'',branchName:'Main Branch',reason:'New account application'}); const [transfer,setTransfer]=useState({sourceAccountId:'',destinationAccountId:'',amount:'',demoOutcome:'SUCCESS'});
+  const [googleClientId, setGoogleClientId] = useState<string>(() => {
+    return (import.meta as any).env?.VITE_GOOGLE_CLIENT_ID || localStorage.getItem('northstar_google_client_id') || '';
+  });
+  const [showGoogleConfig, setShowGoogleConfig] = useState(false);
+  const [clientIdInput, setClientIdInput] = useState('');
+  const [authToken,setAuthToken]=useState(()=>localStorage.getItem('northstar_token')||''); const [user,setUser]=useState<Row|null>(()=>{try{return JSON.parse(localStorage.getItem('northstar_user')||'null')}catch{return null}}); const [authMode,setAuthMode]=useState<'LOGIN'|'REGISTER'|'BOOTSTRAP'>('LOGIN'); const [authForm,setAuthForm]=useState({fullName:'',email:'',password:'',bootstrapSecret:''}); const [authError,setAuthError]=useState(''); const [authMessage,setAuthMessage]=useState(''); const [authBusy,setAuthBusy]=useState(false); const [staffForm,setStaffForm]=useState({fullName:'',email:'',password:'',role:'EMPLOYEE',branchName:'Main Branch'}); const [transferOtp,setTransferOtp]=useState(''); const [transferOtpSent,setTransferOtpSent]=useState(false); const [fdForm,setFdForm]=useState({accountId:'',amount:'',tenureMonths:'12'}); const [loanForm,setLoanForm]=useState({accountId:'',amount:'',purpose:'',monthlyIncome:''}); const [fixedDeposits,setFixedDeposits]=useState<Row[]>([]); const [loans,setLoans]=useState<Row[]>([]); const role=String(user?.role||'CUSTOMER'); const [tab,setTab]=useState('Overview'); const [accounts,setAccounts]=useState<Row[]>([]); const [apps,setApps]=useState<Row[]>([]); const [txns,setTxns]=useState<Row[]>([]); const [events,setEvents]=useState<Row[]>([]); const [selected,setSelected]=useState<Row|null>(null); const [summary,setSummary]=useState<Row>({}); const [notice,setNotice]=useState(''); const [error,setError]=useState(''); const [busy,setBusy]=useState(false);
+  const [deposit,setDeposit]=useState({accountId:'',amount:'',description:''}); const [application,setApplication]=useState({accountType:'SAVINGS',initialDeposit:'',phone:'',dateOfBirth:'',address:'',occupation:'',branchName:'Main Branch',reason:'New account application'}); const [transfer,setTransfer]=useState({sourceAccountId:'',destinationAccountId:'',amount:'',demoOutcome:'SUCCESS'});
  const request=useCallback(async(path:string,opts:RequestInit={})=>{const res=await fetch('/api'+path,{...opts,headers:{'Content-Type':'application/json',...(authToken?{Authorization:'Bearer '+authToken}:{}),...opts.headers}});const data=await res.json().catch(()=>({message:'Unexpected server response'}));if(res.status===401 && authToken){localStorage.removeItem('northstar_token');localStorage.removeItem('northstar_user');setAuthToken('');setUser(null);}if(!res.ok)throw new Error(data.message||data.detail||data.error||'Request failed');return data;},[authToken]);
  const load=useCallback(async()=>{try{const [a,ap,t,s,fd,lo]=await Promise.all([request('/accounts'),request('/applications'),request('/transactions'),request('/summary'),request('/fixed-deposits').catch(()=>[]),request('/loans').catch(()=>[])]);setAccounts(a);setApps(ap);setTxns(t);setSummary(s);setFixedDeposits(fd);setLoans(lo)}catch(e:any){setError(e.message+' — if this is a fresh start, wait for containers to finish starting and refresh.')}},[request]);
  useEffect(()=>{if(!authToken)return;load();const timer=setInterval(load,7000);return()=>clearInterval(timer)},[load,authToken]);
@@ -16,11 +20,315 @@ export default function App(){
  const doDeposit=()=>act(()=>request('/deposits',{method:'POST',body:JSON.stringify({accountId:Number(deposit.accountId),amount:deposit.amount})}),'Deposit request submitted. No balance changes until an employee approves it.').then(()=>setTab('Transactions'));
  const requestTransferOtp=()=>act(()=>request('/notifications/transfer-otp',{method:'POST'}),'Transfer OTP sent to your registered email.').then(()=>setTransferOtpSent(true));
  const doTransfer=()=>act(()=>request('/transfers',{method:'POST',body:JSON.stringify({sourceAccountId:Number(transfer.sourceAccountId),destinationAccountNumber:transfer.destinationAccountId.trim(),amount:transfer.amount,otp:transferOtp})})).then((r:any)=>{if(r?.status==='VALIDATION_FAILED')setNotice(r.description||'Transfer stopped during validation. No funds were moved.');else if(r?.status==='SUCCESS')setNotice('Transfer completed successfully. Open its timeline to inspect the recorded stages.');setTransferOtp('');setTransferOtpSent(false);setTab('Transactions')});
- const isStaff=['EMPLOYEE','MANAGER','ADMIN'].includes(role); const nav=[['Overview',LayoutDashboard],['Accounts',Wallet],['Deposit requests',ArrowDownLeft],['Transfer money',ArrowLeftRight],['Transactions',Activity],['Applications',ClipboardCheck],...(role==='CUSTOMER'?[['Fixed deposits',Banknote] as const]:[]),['Loans',FileText],...(role==='ADMIN'?[['Staff access',Users] as const]:[]) ] as const;
- useEffect(()=>{if(!googleClientId||authMode!=='LOGIN')return;let tries=0;const timer=setInterval(()=>{tries++;const g=(window as any).google;if(!g?.accounts?.id){if(tries>30)clearInterval(timer);return;}clearInterval(timer);g.accounts.id.initialize({client_id:googleClientId,callback:async(resp:any)=>{try{setAuthError('');const r=await fetch('/api/auth/google',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({credential:resp.credential})});const d=await r.json();if(!r.ok)throw new Error(d.detail||'Google sign-in failed');localStorage.setItem('northstar_token',d.accessToken);localStorage.setItem('northstar_user',JSON.stringify(d.user));setAuthToken(d.accessToken);setUser(d.user);setTab('Overview')}catch(e:any){setAuthError(e.message)}}});const target=document.getElementById('google-signin');if(target){target.innerHTML='';g.accounts.id.renderButton(target,{theme:'outline',size:'large',text:'signin_with',shape:'rectangular',width:320})}},300);return()=>clearInterval(timer)},[authMode,googleClientId]);
- const authSubmit=async(e:any)=>{e.preventDefault();setAuthBusy(true);setAuthError('');setAuthMessage('');try{if(authMode==='VERIFY'){const vr=await fetch('/api/auth/verify-email',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({email:authForm.email,otp:verificationOtp})});const vd=await vr.json().catch(()=>({message:'Unexpected server response'}));if(!vr.ok)throw new Error(vd.detail||vd.message||'Email verification failed');setAuthMessage('Email verified. You can now sign in.');setAuthMode('LOGIN');setVerificationOtp('');return;}const endpoint=authMode==='REGISTER'?'/api/auth/register':authMode==='BOOTSTRAP'?'/api/auth/bootstrap-admin':'/api/auth/login';const payload=authMode==='REGISTER'?{fullName:authForm.fullName,email:authForm.email,password:authForm.password}:authMode==='BOOTSTRAP'?{fullName:authForm.fullName,email:authForm.email,password:authForm.password,bootstrapSecret:authForm.bootstrapSecret}:{email:authForm.email,password:authForm.password};const res=await fetch(endpoint,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});const data=await res.json().catch(()=>({message:'Unexpected server response'}));if(!res.ok)throw new Error(data.message||data.detail||'Authentication failed');if(authMode==='REGISTER'){setAuthMessage(data.message||'Check your email for a verification code.');setAuthMode('VERIFY');setAuthForm({...authForm,fullName:''});}else if(authMode==='BOOTSTRAP'){setAuthMessage('Administrator created. Sign in using the new administrator credentials.');setAuthMode('LOGIN');setAuthForm({...authForm,bootstrapSecret:'',password:''});}else{localStorage.setItem('northstar_token',data.accessToken);localStorage.setItem('northstar_user',JSON.stringify(data.user));setAuthToken(data.accessToken);setUser(data.user);setTab('Overview');}}catch(e:any){setAuthError(e.message)}finally{setAuthBusy(false)}};
- const logout=()=>{localStorage.removeItem('northstar_token');localStorage.removeItem('northstar_user');setAuthToken('');setUser(null);setAccounts([]);setApps([]);setTxns([]);setSelected(null);setEvents([]);setTab('Overview')};
- if(!authToken||!user){return <div className="auth-shell"><div className="auth-card"><div className="brand auth-brand"><div className="brandmark"><Landmark size={22}/></div><div><b>northstar</b><small> DIGITAL BANK</small></div></div><p className="eyebrow">SECURE ONLINE BANKING</p><h1>{authMode==='LOGIN'?'Sign in to your bank':authMode==='REGISTER'?'Create your customer account':authMode==='VERIFY'?'Verify your email address':'Set up the first administrator'}</h1><p className="auth-subtitle">Use your own credentials. Your role is assigned by the banking system, not selected in the browser.</p>{authError&&<div className="notice error">{authError}</div>}{authMessage&&<div className="notice success">{authMessage}</div>}<form className="form" onSubmit={authSubmit}>{(authMode==='REGISTER'||authMode==='BOOTSTRAP')&&<Field label="Full name"><input value={authForm.fullName} onChange={e=>setAuthForm({...authForm,fullName:e.target.value})} required/></Field>}<Field label="Email address"><input type="email" autoComplete="username" value={authForm.email} onChange={e=>setAuthForm({...authForm,email:e.target.value})} required/></Field>{authMode!=='VERIFY'&&<Field label="Password"><input type="password" autoComplete={authMode==='LOGIN'?'current-password':'new-password'} minLength={authMode==='LOGIN'?1:10} value={authForm.password} onChange={e=>setAuthForm({...authForm,password:e.target.value})} required/></Field>}{authMode==='VERIFY'&&<Field label="6-digit email verification code"><input inputMode="numeric" pattern="[0-9]{6}" maxLength={6} value={verificationOtp} onChange={e=>setVerificationOtp(e.target.value.replace(/\D/g,'').slice(0,6))} required/></Field>}{authMode==='BOOTSTRAP'&&<Field label="One-time administrator bootstrap secret"><input type="password" value={authForm.bootstrapSecret} onChange={e=>setAuthForm({...authForm,bootstrapSecret:e.target.value})} required/></Field>}<button className="primary" disabled={authBusy}>{authBusy?'Please wait…':authMode==='LOGIN'?'Sign in':authMode==='REGISTER'?'Create customer account':authMode==='VERIFY'?'Verify email':'Create first administrator'} <ChevronRight size={17}/></button></form>{authMode==='LOGIN'&&googleClientId&&<div className="google-signin-wrap"><div className="auth-subtitle">or continue with Google</div><div id="google-signin"></div></div>}<div className="auth-links">{authMode==='VERIFY'&&<button onClick={async()=>{try{const r=await fetch('/api/auth/resend-verification',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({email:authForm.email,password:authForm.password})});const d=await r.json();if(!r.ok)throw new Error(d.detail||'Could not resend code');setAuthMessage(d.message||'Verification code resent.')}catch(e:any){setAuthError(e.message)}}}>Resend verification code</button>}{authMode!=='LOGIN'&&<button onClick={()=>{setAuthMode('LOGIN');setAuthError('');setAuthMessage('')}}>Back to sign in</button>}{authMode==='LOGIN'&&<><button onClick={()=>{setAuthMode('REGISTER');setAuthError('');setAuthMessage('')}}>New customer? Register</button><button onClick={()=>{setAuthMode('BOOTSTRAP');setAuthError('');setAuthMessage('')}}>Initial administrator setup</button></>}</div><small className="auth-foot">Educational banking simulator · Do not use real banking credentials.</small></div></div>;}
+  const isStaff = ['EMPLOYEE', 'MANAGER', 'ADMIN'].includes(role);
+  const nav = [
+    ['Overview', LayoutDashboard],
+    ['Accounts', Wallet],
+    ['Deposit requests', ArrowDownLeft],
+    ['Transfer money', ArrowLeftRight],
+    ['Transactions', Activity],
+    ['Applications', ClipboardCheck],
+    ...(role === 'CUSTOMER' ? [['Fixed deposits', Banknote] as const] : []),
+    ['Loans', FileText],
+    ...(role === 'ADMIN' ? [['Staff access', Users] as const] : [])
+  ] as const;
+
+  // Fetch Google Client ID from backend if not already set
+  useEffect(() => {
+    if (!googleClientId) {
+      fetch('/api/auth/google-client-id')
+        .then(r => r.json())
+        .then(d => {
+          if (d.clientId) {
+            setGoogleClientId(d.clientId);
+            localStorage.setItem('northstar_google_client_id', d.clientId);
+          }
+        })
+        .catch(() => {});
+    }
+  }, [googleClientId]);
+
+  // Initialize Google Identity Services and render official Google Sign In button
+  useEffect(() => {
+    if (!googleClientId) return;
+    let tries = 0;
+    const timer = setInterval(() => {
+      tries++;
+      const g = (window as any).google;
+      if (!g?.accounts?.id) {
+        if (tries > 40) clearInterval(timer);
+        return;
+      }
+      clearInterval(timer);
+      try {
+        g.accounts.id.initialize({
+          client_id: googleClientId,
+          callback: async (resp: any) => {
+            setAuthBusy(true);
+            setAuthError('');
+            try {
+              const r = await fetch('/api/auth/google', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ credential: resp.credential })
+              });
+              const d = await r.json();
+              if (!r.ok) throw new Error(d.detail || d.message || 'Google sign-in failed');
+              localStorage.setItem('northstar_token', d.accessToken);
+              localStorage.setItem('northstar_user', JSON.stringify(d.user));
+              setAuthToken(d.accessToken);
+              setUser(d.user);
+              setTab('Overview');
+              setNotice('Signed in successfully with your Google account!');
+            } catch (e: any) {
+              setAuthError(e.message);
+            } finally {
+              setAuthBusy(false);
+            }
+          }
+        });
+
+        const target = document.getElementById('google-signin-btn-slot');
+        if (target) {
+          target.innerHTML = '';
+          g.accounts.id.renderButton(target, {
+            theme: 'outline',
+            size: 'large',
+            text: authMode === 'REGISTER' ? 'signup_with' : 'signin_with',
+            shape: 'rectangular',
+            width: 380,
+            logo_alignment: 'left'
+          });
+        }
+        try { g.accounts.id.prompt(); } catch {}
+      } catch (err: any) {
+        console.error('Failed to initialize Google Sign-In:', err);
+      }
+    }, 200);
+    return () => clearInterval(timer);
+  }, [googleClientId, authMode]);
+
+  const saveGoogleClientId = (e: any) => {
+    e.preventDefault();
+    const cid = clientIdInput.trim();
+    if (!cid) return;
+    setGoogleClientId(cid);
+    localStorage.setItem('northstar_google_client_id', cid);
+    setShowGoogleConfig(false);
+    fetch('/api/auth/google-client-id', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ clientId: cid })
+    }).catch(() => {});
+  };
+
+  const authSubmit = async (e: any) => {
+    e.preventDefault();
+    setAuthBusy(true);
+    setAuthError('');
+    setAuthMessage('');
+    try {
+      const endpoint = authMode === 'REGISTER' ? '/api/auth/register' : authMode === 'BOOTSTRAP' ? '/api/auth/bootstrap-admin' : '/api/auth/login';
+      const payload = authMode === 'REGISTER'
+        ? { fullName: authForm.fullName, email: authForm.email, password: authForm.password }
+        : authMode === 'BOOTSTRAP'
+          ? { fullName: authForm.fullName, email: authForm.email, password: authForm.password, bootstrapSecret: authForm.bootstrapSecret }
+          : { email: authForm.email, password: authForm.password };
+      const res = await fetch(endpoint, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+      });
+      const data = await res.json().catch(() => ({ message: 'Unexpected server response' }));
+      if (!res.ok) throw new Error(data.message || data.detail || 'Authentication failed');
+      if (authMode === 'BOOTSTRAP') {
+        setAuthMessage('Administrator created. Sign in using the new administrator credentials.');
+        setAuthMode('LOGIN');
+        setAuthForm({ ...authForm, bootstrapSecret: '', password: '' });
+      } else {
+        localStorage.setItem('northstar_token', data.accessToken);
+        localStorage.setItem('northstar_user', JSON.stringify(data.user));
+        setAuthToken(data.accessToken);
+        setUser(data.user);
+        setTab('Overview');
+        if (authMode === 'REGISTER') {
+          setNotice('Customer account created successfully! Welcome to Northstar Bank.');
+        }
+      }
+    } catch (e: any) {
+      setAuthError(e.message);
+    } finally {
+      setAuthBusy(false);
+    }
+  };
+
+  const logout = () => {
+    localStorage.removeItem('northstar_token');
+    localStorage.removeItem('northstar_user');
+    setAuthToken('');
+    setUser(null);
+    setAccounts([]);
+    setApps([]);
+    setTxns([]);
+    setSelected(null);
+    setEvents([]);
+    setTab('Overview');
+  };
+
+  if (!authToken || !user) {
+    return (
+      <div className="auth-shell">
+        <div className="auth-card">
+          <div className="brand auth-brand">
+            <div className="brandmark"><Landmark size={22} /></div>
+            <div><b>northstar</b><small> DIGITAL BANK</small></div>
+          </div>
+          <p className="eyebrow">SECURE ONLINE BANKING</p>
+          <h1>
+            {authMode === 'LOGIN' ? 'Sign in to your bank' : authMode === 'REGISTER' ? 'Create your customer account' : 'Set up the first administrator'}
+          </h1>
+          <p className="auth-subtitle">
+            {authMode === 'REGISTER' ? 'Enter your details below to instantly open your customer portal.' : 'Use your credentials to access your banking workspace.'}
+          </p>
+
+          {authError && <div className="notice error">{authError}</div>}
+          {authMessage && <div className="notice success">{authMessage}</div>}
+
+          {/* Google Sign In Section */}
+          {authMode !== 'BOOTSTRAP' && (
+            <div style={{ marginBottom: '16px' }}>
+              {googleClientId ? (
+                <div
+                  id="google-signin-btn-slot"
+                  style={{ display: 'flex', justifyContent: 'center', minHeight: '44px' }}
+                />
+              ) : (
+                <button
+                  type="button"
+                  className="google-btn"
+                  onClick={() => setShowGoogleConfig(true)}
+                  disabled={authBusy}
+                  id="google-custom-btn"
+                >
+                  <svg width="18" height="18" viewBox="0 0 48 48">
+                    <path fill="#EA4335" d="M24 9.5c3.54 0 6.71 1.22 9.21 3.6l6.85-6.85C35.9 2.38 30.47 0 24 0 14.62 0 6.51 5.38 2.56 13.22l7.98 6.19C12.43 13.72 17.74 9.5 24 9.5z"/>
+                    <path fill="#4285F4" d="M46.98 24.55c0-1.57-.15-3.09-.38-4.55H24v9.02h12.94c-.58 2.96-2.26 5.48-4.78 7.18l7.73 6c4.51-4.18 7.09-10.36 7.09-17.65z"/>
+                    <path fill="#FBBC05" d="M10.53 28.59c-.48-1.45-.76-2.99-.76-4.59s.27-3.14.76-4.59l-7.98-6.19C.92 16.46 0 20.12 0 24c0 3.88.92 7.54 2.56 10.78l7.97-6.19z"/>
+                    <path fill="#34A853" d="M24 48c6.48 0 11.93-2.13 15.89-5.81l-7.73-6c-2.15 1.45-4.92 2.3-8.16 2.3-6.26 0-11.57-4.22-13.47-9.91l-7.98 6.19C6.51 42.62 14.62 48 24 48z"/>
+                  </svg>
+                  <span>{authMode === 'REGISTER' ? 'Sign up with Google' : 'Sign in with Google'}</span>
+                </button>
+              )}
+              <div className="auth-divider"><span>or continue with email</span></div>
+            </div>
+          )}
+
+          <form className="form" onSubmit={authSubmit}>
+            {(authMode === 'REGISTER' || authMode === 'BOOTSTRAP') && (
+              <Field label="Full name">
+                <input
+                  value={authForm.fullName}
+                  onChange={e => setAuthForm({ ...authForm, fullName: e.target.value })}
+                  placeholder="e.g. John Doe"
+                  required
+                />
+              </Field>
+            )}
+            <Field label="Email address">
+              <input
+                type="email"
+                autoComplete="username"
+                value={authForm.email}
+                onChange={e => setAuthForm({ ...authForm, email: e.target.value })}
+                placeholder="name@example.com"
+                required
+              />
+            </Field>
+            <Field label="Password">
+              <input
+                type="password"
+                autoComplete={authMode === 'LOGIN' ? 'current-password' : 'new-password'}
+                minLength={authMode === 'LOGIN' ? 1 : 10}
+                value={authForm.password}
+                onChange={e => setAuthForm({ ...authForm, password: e.target.value })}
+                placeholder={authMode === 'LOGIN' ? '••••••••' : 'Min 10 chars (letters + numbers)'}
+                required
+              />
+            </Field>
+            {authMode === 'BOOTSTRAP' && (
+              <Field label="One-time administrator bootstrap secret">
+                <input
+                  type="password"
+                  value={authForm.bootstrapSecret}
+                  onChange={e => setAuthForm({ ...authForm, bootstrapSecret: e.target.value })}
+                  required
+                />
+              </Field>
+            )}
+            <button className="primary" disabled={authBusy}>
+              {authBusy ? 'Please wait…' : authMode === 'LOGIN' ? 'Sign in' : authMode === 'REGISTER' ? 'Create customer account' : 'Create first administrator'}{' '}
+              <ChevronRight size={17} />
+            </button>
+          </form>
+
+          <div className="auth-links">
+            {authMode !== 'LOGIN' && (
+              <button type="button" onClick={() => { setAuthMode('LOGIN'); setAuthError(''); setAuthMessage(''); }}>
+                Back to sign in
+              </button>
+            )}
+            {authMode === 'LOGIN' && (
+              <>
+                <button type="button" onClick={() => { setAuthMode('REGISTER'); setAuthError(''); setAuthMessage(''); }}>
+                  New customer? Register
+                </button>
+                <button type="button" onClick={() => { setAuthMode('BOOTSTRAP'); setAuthError(''); setAuthMessage(''); }}>
+                  Initial administrator setup
+                </button>
+              </>
+            )}
+          </div>
+          <small className="auth-foot">Educational banking simulator · Northstar Bank Online Services</small>
+        </div>
+
+        {/* Google OAuth Configuration Modal (only shown if Google Client ID is not configured yet) */}
+        {showGoogleConfig && (
+          <div className="google-modal-overlay" onClick={() => setShowGoogleConfig(false)}>
+            <div className="google-modal" onClick={e => e.stopPropagation()}>
+              <div className="google-modal-header">
+                <svg width="22" height="22" viewBox="0 0 48 48">
+                  <path fill="#EA4335" d="M24 9.5c3.54 0 6.71 1.22 9.21 3.6l6.85-6.85C35.9 2.38 30.47 0 24 0 14.62 0 6.51 5.38 2.56 13.22l7.98 6.19C12.43 13.72 17.74 9.5 24 9.5z"/>
+                  <path fill="#4285F4" d="M46.98 24.55c0-1.57-.15-3.09-.38-4.55H24v9.02h12.94c-.58 2.96-2.26 5.48-4.78 7.18l7.73 6c4.51-4.18 7.09-10.36 7.09-17.65z"/>
+                  <path fill="#FBBC05" d="M10.53 28.59c-.48-1.45-.76-2.99-.76-4.59s.27-3.14.76-4.59l-7.98-6.19C.92 16.46 0 20.12 0 24c0 3.88.92 7.54 2.56 10.78l7.97-6.19z"/>
+                  <path fill="#34A853" d="M24 48c6.48 0 11.93-2.13 15.89-5.81l-7.73-6c-2.15 1.45-4.92 2.3-8.16 2.3-6.26 0-11.57-4.22-13.47-9.91l-7.98 6.19C6.51 42.62 14.62 48 24 48z"/>
+                </svg>
+                <h3>Connect Google Sign-In</h3>
+              </div>
+              <p>To display your real Google accounts, enter your Google OAuth Web Client ID below:</p>
+              <form onSubmit={saveGoogleClientId} style={{ display: 'grid', gap: '12px' }}>
+                <input
+                  type="text"
+                  placeholder="e.g. 123456789-abcdef.apps.googleusercontent.com"
+                  value={clientIdInput}
+                  onChange={e => setClientIdInput(e.target.value)}
+                  required
+                  style={{ width: '100%', padding: '10px 12px', border: '1px solid #dfe5ec', borderRadius: '8px', fontSize: '12px' }}
+                />
+                <div style={{ display: 'flex', gap: '10px' }}>
+                  <button type="button" className="secondary" onClick={() => setShowGoogleConfig(false)} style={{ flex: 1 }}>
+                    Cancel
+                  </button>
+                  <button type="submit" className="primary" style={{ flex: 1 }}>
+                    Connect Google
+                  </button>
+                </div>
+              </form>
+            </div>
+          </div>
+        )}
+      </div>
+    );
+  }
  return <div className="shell"><aside className="sidebar"><div className="brand"><div className="brandmark"><Landmark size={22}/></div><div><b>northstar</b><small> DIGITAL BANK</small></div></div><div className="profile"><div className="avatar">{role==='CUSTOMER'?'CU':role==='EMPLOYEE'?'EO':role==='MANAGER'?'BM':'SA'}</div><div><b>{role==='CUSTOMER'?'Customer workspace':role==='EMPLOYEE'?'Operations Officer':role==='MANAGER'?'Branch Manager':'System Admin'}</b><small>{role.replace('_',' ')}{user?.branch?` · ${user.branch}`:''}</small></div></div><div className="navlabel">WORKSPACE</div><nav>{nav.map(([label,Icon])=><button key={label} className={'navitem '+(tab===label?'active':'')} onClick={()=>setTab(label)}><Icon size={18}/><span>{label}</span>{label==='Deposit requests'&&Number(summary.pendingDeposits)>0&&<i>{summary.pendingDeposits}</i>}</button>)}</nav><div className="sidebar-bottom"><div className="secure"><ShieldCheck size={18}/><div><b>Secure workspace</b><small>Account operations</small></div></div><small className="buildtag">ONLINE BANKING · MVP 1.0</small></div></aside>
  <main className="main"><header className="topbar"><div><div className="eyebrow">DIGITAL BANKING / {tab.toUpperCase()}</div><h1>{tab==='Overview'?'Welcome to Northstar Bank':tab}</h1><p>{tab==='Overview'?'Your money, your view. A clear picture of your banking activity.':'Manage accounts, review requests and track transaction stages.'}</p></div><div className="top-actions"><div className="signed-in"><b>{user?.fullName||user?.full_name||user?.email}</b><small>{role} · authenticated</small></div><button className="secondary" onClick={logout}>Sign out</button><button className="iconbtn" title="Refresh" onClick={load}><RefreshCw size={18}/></button></div></header>
  {notice&&<div className="notice success"><CheckCircle2 size={18}/>{notice}<button onClick={()=>setNotice('')}>×</button></div>}{error&&<div className="notice error"><AlertTriangle size={18}/>{error}<button onClick={()=>setError('')}>×</button></div>}

@@ -13,7 +13,9 @@ def init():
  os.makedirs(os.path.dirname(DB),exist_ok=True)
  with db() as c: c.execute('''CREATE TABLE IF NOT EXISTS otp_challenges(id INTEGER PRIMARY KEY AUTOINCREMENT,email TEXT NOT NULL,purpose TEXT NOT NULL,otp_hash TEXT NOT NULL,expires_at TEXT NOT NULL,attempts INTEGER NOT NULL DEFAULT 0,consumed INTEGER NOT NULL DEFAULT 0,created_at TEXT DEFAULT CURRENT_TIMESTAMP)''')
 def send_mail(to,subject,body):
- if not SMTP_HOST or not SMTP_FROM: raise HTTPException(503,'Email is not configured. Set SMTP_HOST, SMTP_USER, SMTP_PASSWORD and SMTP_FROM in .env.')
+ if not SMTP_HOST or not SMTP_FROM:
+  print(f"\n[DEMO NOTIFICATION] Simulated email sent to {to}:\nSubject: {subject}\n{body}\n", flush=True)
+  return
  msg=EmailMessage(); msg['Subject']=subject; msg['From']=SMTP_FROM; msg['To']=to; msg.set_content(body)
  try:
   with smtplib.SMTP(SMTP_HOST,SMTP_PORT,timeout=10) as server:

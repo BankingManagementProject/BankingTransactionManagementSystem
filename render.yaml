@@ -1,0 +1,17 @@
+services:
+  - type: web
+    name: northstar-bank
+    runtime: docker
+    dockerfilePath: Dockerfile
+    plan: free
+    region: oregon
+    envVars:
+      - key: BANK_JWT_SECRET
+        generateValue: true
+      - key: BANK_BOOTSTRAP_SECRET
+        value: admin-bootstrap-secret-northstar-2026
+      - key: INTERNAL_SECRET
+        generateValue: true
+      - key: GOOGLE_CLIENT_ID
+        sync: false
+    autoDeploy: true
