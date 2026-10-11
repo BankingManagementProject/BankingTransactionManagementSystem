@@ -80,3 +80,6 @@ Admin-only deterministic scenarios are available in **Transfer money**. They are
 
 ## Merged Saga recovery
 This build includes a scheduled stale-Saga recovery worker. It scans in-flight transfers after a configurable grace period, checks whether the deterministic destination-credit posting exists, and either safely attempts idempotent compensation or escalates ambiguous cases to `REQUIRES_REVIEW`. See `MERGED_REQUIREMENTS_AND_LIMITATIONS.md` for behavior and remaining production limitations.
+
+# BankingTransactionManagementSystem
+A software system for managing customer accounts, banking transactions, deposits, withdrawals, fund transfers, and transaction records.
