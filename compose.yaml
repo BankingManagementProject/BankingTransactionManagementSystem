@@ -1,0 +1,132 @@
+name: northstar-bank
+services:
+  identity-service:
+    build:
+      context: .
+      dockerfile: services/identity/Dockerfile
+    environment:
+      DB_PATH: /data/identity.db
+      BANK_JWT_SECRET: ${BANK_JWT_SECRET:?Set BANK_JWT_SECRET in .env}
+      BANK_BOOTSTRAP_SECRET: ${BANK_BOOTSTRAP_SECRET:?Set BANK_BOOTSTRAP_SECRET in .env}
+      INTERNAL_SECRET: ${INTERNAL_SECRET:?Set INTERNAL_SECRET in .env}
+      NOTIFICATION_URL: http://notification-service:8000
+      GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:-}
+    volumes: [identity_data:/data]
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 10s
+      timeout: 3s
+      retries: 10
+
+  notification-service:
+    build:
+      context: .
+      dockerfile: services/notification/Dockerfile
+    environment:
+      DB_PATH: /data/notification.db
+      INTERNAL_SECRET: ${INTERNAL_SECRET:?Set INTERNAL_SECRET in .env}
+      BANK_JWT_SECRET: ${BANK_JWT_SECRET:?Set BANK_JWT_SECRET in .env}
+      SMTP_HOST: ${SMTP_HOST:-}
+      SMTP_PORT: ${SMTP_PORT:-587}
+      SMTP_USER: ${SMTP_USER:-}
+      SMTP_PASSWORD: ${SMTP_PASSWORD:-}
+      SMTP_FROM: ${SMTP_FROM:-}
+      SMTP_STARTTLS: ${SMTP_STARTTLS:-true}
+    volumes: [notification_data:/data]
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 10s
+      timeout: 3s
+      retries: 10
+
+  account-service:
+    build:
+      context: .
+      dockerfile: services/account/Dockerfile
+    environment:
+      DB_PATH: /data/account.db
+      BANK_JWT_SECRET: ${BANK_JWT_SECRET:?Set BANK_JWT_SECRET in .env}
+      INTERNAL_SECRET: ${INTERNAL_SECRET:?Set INTERNAL_SECRET in .env}
+      LEDGER_URL: http://ledger-service:8000
+      TRANSACTION_URL: http://transaction-service:8000
+    volumes: [account_data:/data]
+    depends_on:
+      ledger-service: { condition: service_healthy }
+      transaction-service: { condition: service_healthy }
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/api/health')"]
+      interval: 10s
+      timeout: 3s
+      retries: 10
+
+  transaction-service:
+    build:
+      context: .
+      dockerfile: services/transaction/Dockerfile
+    environment:
+      DB_PATH: /data/transaction.db
+      BANK_JWT_SECRET: ${BANK_JWT_SECRET:?Set BANK_JWT_SECRET in .env}
+      INTERNAL_SECRET: ${INTERNAL_SECRET:?Set INTERNAL_SECRET in .env}
+      ACCOUNT_URL: http://account-service:8000
+      LEDGER_URL: http://ledger-service:8000
+      RABBITMQ_HOST: rabbitmq
+      NOTIFICATION_URL: http://notification-service:8000
+      RABBITMQ_USER: ${RABBITMQ_USER:-northstar}
+      RABBITMQ_PASSWORD: ${RABBITMQ_PASSWORD:?Set RABBITMQ_PASSWORD in .env}
+    volumes: [transaction_data:/data]
+    depends_on:
+      ledger-service: { condition: service_healthy }
+      rabbitmq: { condition: service_healthy }
+      notification-service: { condition: service_healthy }
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/api/health')"]
+      interval: 10s
+      timeout: 3s
+      retries: 10
+
+  ledger-service:
+    build:
+      context: .
+      dockerfile: services/ledger/Dockerfile
+    environment:
+      DB_PATH: /data/ledger.db
+      INTERNAL_SECRET: ${INTERNAL_SECRET:?Set INTERNAL_SECRET in .env}
+    volumes: [ledger_data:/data]
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 10s
+      timeout: 3s
+      retries: 10
+
+  rabbitmq:
+    image: rabbitmq:3.13-management-alpine
+    environment:
+      RABBITMQ_DEFAULT_USER: ${RABBITMQ_USER:-northstar}
+      RABBITMQ_DEFAULT_PASS: ${RABBITMQ_PASSWORD:?Set RABBITMQ_PASSWORD in .env}
+    ports:
+      - "15672:15672"
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  frontend:
+    build:
+      context: ./frontend
+      args:
+        VITE_GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:-}
+    ports:
+      - "5173:80"
+    depends_on:
+      identity-service: { condition: service_healthy }
+      notification-service: { condition: service_healthy }
+      account-service: { condition: service_healthy }
+      transaction-service: { condition: service_healthy }
+
+volumes:
+  identity_data:
+  account_data:
+  transaction_data:
+  ledger_data:
+  notification_data:
