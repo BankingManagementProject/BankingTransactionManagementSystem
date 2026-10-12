@@ -5,6 +5,8 @@ Validates all 18 requirements across Admin, Manager, Staff, and Customer roles.
 """
 import sys
 import unittest
+import uuid
+import sqlite3
 import httpx
 
 BASE_URL = 'http://127.0.0.1:5173'
@@ -12,6 +14,17 @@ BASE_URL = 'http://127.0.0.1:5173'
 class TestFourRolesBankingWorkflow(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
+        # Reset account 1 balance in both account and ledger databases for repeatable transfer tests
+        try:
+            with sqlite3.connect('data/account.db') as con:
+                con.execute("UPDATE accounts SET balance = 75000.0, daily_limit = 5000000.0 WHERE id = 1")
+                con.commit()
+            with sqlite3.connect('data/ledger.db') as con:
+                con.execute("UPDATE ledger_accounts SET available_balance = 75000.0 WHERE account_number = '2000000001D04C8E'")
+                con.commit()
+        except Exception:
+            pass
+
         cls.client = httpx.Client(base_url=BASE_URL, timeout=12.0)
         
         # 1. Login all 4 roles
@@ -56,20 +69,24 @@ class TestFourRolesBankingWorkflow(unittest.TestCase):
         self.assertEqual(bad_pw.status_code, 401)
 
         # Create temporary user, deactivate them, and verify login block
-        temp_user = self.client.post('/api/auth/users', json={
+        random_suffix = uuid.uuid4().hex[:6]
+        temp_email = f"tempdeact_{random_suffix}@northstar.local"
+        temp_user_res = self.client.post('/api/auth/users', json={
             'fullName': 'Temp Deactivated',
-            'email': 'tempdeact@northstar.local',
+            'email': temp_email,
             'password': 'TempPass1234',
             'role': 'CUSTOMER',
             'branchName': 'Main Branch'
-        }, headers=self.h_admin).json()['user']
+        }, headers=self.h_admin)
+        self.assertEqual(temp_user_res.status_code, 200)
+        temp_user = temp_user_res.json()['user']
 
         # Deactivate user
         deact = self.client.put(f"/api/auth/users/{temp_user['id']}/status", json={'status': 'INACTIVE'}, headers=self.h_admin)
         self.assertEqual(deact.status_code, 200)
 
         # Login must be rejected with 403
-        blocked = self.client.post('/api/auth/login', json={'email': 'tempdeact@northstar.local', 'password': 'TempPass1234'})
+        blocked = self.client.post('/api/auth/login', json={'email': temp_email, 'password': 'TempPass1234'})
         self.assertEqual(blocked.status_code, 403)
         self.assertIn('deactivated', blocked.json()['detail'].lower())
 
@@ -91,10 +108,11 @@ class TestFourRolesBankingWorkflow(unittest.TestCase):
 
     # Req 5: Staff customer-service & onboarding
     def test_05_staff_customer_onboarding(self):
+        rand_sfx = uuid.uuid4().hex[:5]
         onboard = self.client.post('/api/staff/customer-registration', json={
             'fullName': 'Arjun Mehta',
-            'email': 'arjun.mehta@example.com',
-            'phone': '9876543299',
+            'email': f'arjun_{rand_sfx}@example.com',
+            'phone': f'98{rand_sfx}29',
             'dateOfBirth': '1992-04-10',
             'address': '789 Lake View, Guntur',
             'occupation': 'Business Analyst',
@@ -110,8 +128,8 @@ class TestFourRolesBankingWorkflow(unittest.TestCase):
         # Admin sets threshold to 15000
         self.client.post('/api/transactions/config', json={
             'approvalThreshold': 15000,
-            'dailyLimit': 100000,
-            'singleLimit': 100000,
+            'dailyLimit': 5000000,
+            'singleLimit': 5000000,
             'minBalance': 1000
         }, headers=self.h_admin)
 

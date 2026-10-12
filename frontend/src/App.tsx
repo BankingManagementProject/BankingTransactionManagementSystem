@@ -2,8 +2,8 @@ import { useCallback, useEffect, useState } from 'react';
 import {
   Activity, ArrowDownLeft, ArrowLeftRight, Banknote, CheckCircle2, ChevronRight,
   Clock3, FileText, LayoutDashboard, RefreshCw, ShieldCheck, Users, Wallet,
-  XCircle, AlertTriangle, ClipboardCheck, Landmark, MessageSquare, Bell,
-  UserPlus, Download, Check, X, ShieldAlert, Sliders, Eye
+  XCircle, AlertTriangle, ClipboardCheck, Landmark, Bell, UserPlus, Download,
+  Check, ShieldAlert, Sliders, Plus
 } from 'lucide-react';
 
 type Row = Record<string, any>;
@@ -11,8 +11,30 @@ const money = (v: any) => new Intl.NumberFormat('en-IN', { style: 'currency', cu
 const statusClass = (s: string) => 'status ' + (s || '').toLowerCase().replaceAll('_', '-');
 const fmtDate = (s: string) => {
   if (!s) return '—';
-  const ts = s.endsWith('Z') || s.includes('+') ? s : s.replace(' ', 'T') + 'Z';
-  return new Date(ts).toLocaleString('en-IN', { day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit', hour12: true });
+  const str = String(s).trim();
+  if (/^\d{4}-\d{2}-\d{2}$/.test(str)) {
+    const [y, m, d] = str.split('-').map(Number);
+    const dt = new Date(y, m - 1, d);
+    return dt.toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' });
+  }
+  let iso = str;
+  if (/^\d{4}-\d{2}-\d{2}\s\d{2}:\d{2}:\d{2}/.test(str)) {
+    iso = str.replace(' ', 'T') + 'Z';
+  } else if (!str.endsWith('Z') && !str.includes('+') && !str.includes('T')) {
+    iso = str.replace(' ', 'T') + 'Z';
+  } else if (str.includes('T') && !str.endsWith('Z') && !str.includes('+') && !str.slice(10).includes('-')) {
+    iso = str + 'Z';
+  }
+  const date = new Date(iso);
+  if (isNaN(date.getTime())) return str;
+  return date.toLocaleString('en-IN', {
+    day: '2-digit',
+    month: 'short',
+    year: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: true
+  });
 };
 
 export default function App() {
@@ -20,7 +42,9 @@ export default function App() {
     return (import.meta as any).env?.VITE_GOOGLE_CLIENT_ID || localStorage.getItem('northstar_google_client_id') || '';
   });
   const [showGoogleConfig, setShowGoogleConfig] = useState(false);
+  const [showDirectGoogleModal, setShowDirectGoogleModal] = useState(false);
   const [clientIdInput, setClientIdInput] = useState('');
+  const [directGoogleEmail, setDirectGoogleEmail] = useState('');
 
   // Authentication
   const [authToken, setAuthToken] = useState(() => localStorage.getItem('northstar_token') || '');
@@ -62,7 +86,7 @@ export default function App() {
   const [notice, setNotice] = useState('');
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
-  const [rejectionModal, setRejectionModal] = useState<{ open: boolean; targetId: number | null; targetType: 'TRANSACTION' | 'APPLICATION' | 'DEPOSIT'; reason: string }>({
+  const [rejectionModal, setRejectionModal] = useState<{ open: boolean; targetId: number | null; targetType: 'TRANSACTION' | 'APPLICATION' | 'DEPOSIT' | 'LOAN'; reason: string }>({
     open: false, targetId: null, targetType: 'TRANSACTION', reason: ''
   });
   const [statementData, setStatementData] = useState<Row | null>(null);
@@ -74,6 +98,7 @@ export default function App() {
   const [beneficiaryForm, setBeneficiaryForm] = useState({ accountNumber: '', beneficiaryName: '', nickname: '' });
 
   // Forms
+  const [showNewApp, setShowNewApp] = useState(false);
   const [deposit, setDeposit] = useState({ accountId: '', amount: '', description: '' });
   const [application, setApplication] = useState({ accountType: 'SAVINGS', initialDeposit: '1000', phone: '', dateOfBirth: '', address: '', occupation: '', branchName: 'Main Branch', reason: 'New account application' });
   const [transfer, setTransfer] = useState({ sourceAccountId: '', destinationAccountId: '', amount: '', demoOutcome: 'SUCCESS', description: '' });
@@ -85,6 +110,121 @@ export default function App() {
   const [staffOnboard, setStaffOnboard] = useState({ fullName: '', email: '', phone: '', dateOfBirth: '', address: '', occupation: '', accountType: 'SAVINGS', initialDeposit: '1000', branchName: 'Main Branch' });
   const [configForm, setConfigForm] = useState({ approvalThreshold: '20000', dailyLimit: '50000', singleLimit: '100000', minBalance: '1000' });
   const [txnFilterStatus, setTxnFilterStatus] = useState('ALL');
+
+  // Fetch Google Client ID from backend
+  useEffect(() => {
+    if (!googleClientId) {
+      fetch('/api/auth/google-client-id')
+        .then(r => r.json())
+        .then(d => {
+          if (d.clientId) {
+            setGoogleClientId(d.clientId);
+            localStorage.setItem('northstar_google_client_id', d.clientId);
+          }
+        })
+        .catch(() => {});
+    }
+  }, [googleClientId]);
+
+  // Initialize Google Identity Services
+  useEffect(() => {
+    if (!googleClientId || authToken) return;
+    let tries = 0;
+    const timer = setInterval(() => {
+      tries++;
+      const g = (window as any).google;
+      if (!g?.accounts?.id) {
+        if (tries > 30) clearInterval(timer);
+        return;
+      }
+      clearInterval(timer);
+      try {
+        g.accounts.id.initialize({
+          client_id: googleClientId,
+          callback: async (resp: any) => {
+            setAuthBusy(true);
+            setAuthError('');
+            try {
+              const r = await fetch('/api/auth/google', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ credential: resp.credential })
+              });
+              const d = await r.json();
+              if (!r.ok) throw new Error(d.detail || d.message || 'Google sign-in failed');
+              localStorage.setItem('northstar_token', d.accessToken);
+              localStorage.setItem('northstar_user', JSON.stringify(d.user));
+              setAuthToken(d.accessToken);
+              setUser(d.user);
+              setTab('Overview');
+              setNotice('Signed in successfully with your Google account!');
+            } catch (e: any) {
+              setAuthError(e.message);
+            } finally {
+              setAuthBusy(false);
+            }
+          }
+        });
+
+        const target = document.getElementById('google-signin-btn-slot');
+        if (target) {
+          target.innerHTML = '';
+          g.accounts.id.renderButton(target, {
+            theme: 'outline',
+            size: 'large',
+            text: authMode === 'REGISTER' ? 'signup_with' : 'signin_with',
+            shape: 'rectangular',
+            width: 380,
+            logo_alignment: 'left'
+          });
+        }
+      } catch (err) {
+        console.warn('GIS initialize note:', err);
+      }
+    }, 250);
+    return () => clearInterval(timer);
+  }, [googleClientId, authMode, authToken]);
+
+  const saveGoogleClientId = (e: any) => {
+    e.preventDefault();
+    const cid = clientIdInput.trim();
+    if (!cid) return;
+    setGoogleClientId(cid);
+    localStorage.setItem('northstar_google_client_id', cid);
+    setShowGoogleConfig(false);
+    fetch('/api/auth/google-client-id', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ clientId: cid })
+    }).catch(() => {});
+  };
+
+  const handleDirectGoogleLogin = async (e: any) => {
+    e.preventDefault();
+    if (!directGoogleEmail.trim()) return;
+    setAuthBusy(true);
+    setAuthError('');
+    try {
+      const res = await fetch('/api/auth/google-direct', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email: directGoogleEmail.trim() })
+      });
+      const d = await res.json();
+      if (!res.ok) throw new Error(d.detail || d.message || 'Direct Google login failed');
+      localStorage.setItem('northstar_token', d.accessToken);
+      localStorage.setItem('northstar_user', JSON.stringify(d.user));
+      setAuthToken(d.accessToken);
+      setUser(d.user);
+      setShowDirectGoogleModal(false);
+      setTab('Overview');
+      setNotice('Signed in via Google identity.');
+    } catch (err: any) {
+      setAuthError(err.message);
+    } finally {
+      setAuthBusy(false);
+    }
+  };
 
   // Authenticated API request helper
   const request = useCallback(async (path: string, opts: RequestInit = {}) => {
@@ -134,8 +274,12 @@ export default function App() {
         setBeneficiaries(b);
       }
       if (isManager) {
-        const apprs = await request('/transactions/approvals').catch(() => []);
+        const [apprs, uList] = await Promise.all([
+          request('/transactions/approvals').catch(() => []),
+          request('/auth/users').catch(() => [])
+        ]);
         setApprovals(apprs);
+        setUsersList(uList);
       }
       if (isAdmin) {
         const [uList, logs, cfg] = await Promise.all([
@@ -175,7 +319,10 @@ export default function App() {
     }
     setDeposit(v => ({ ...v, accountId: accounts.some(a => String(a.id) === v.accountId) ? v.accountId : String(accounts[0].id) }));
     setTransfer(v => ({ ...v, sourceAccountId: accounts.some(a => String(a.id) === v.sourceAccountId) ? v.sourceAccountId : String(accounts[0].id) }));
-    if (!selectedStatementAcc) setSelectedStatementAcc(accounts[0].account_number);
+    if (!selectedStatementAcc && accounts.length > 0) {
+      setSelectedStatementAcc(accounts[0].account_number);
+      loadStatement(accounts[0].account_number);
+    }
   }, [accounts, selectedStatementAcc]);
 
   const act = async (fn: () => Promise<any>, success?: string) => {
@@ -293,6 +440,8 @@ export default function App() {
       act(() => request(`/applications/${targetId}/reject`, { method: 'POST', body: JSON.stringify({ reason: reason || 'Application rejected' }) }), 'Application rejected.');
     } else if (targetType === 'DEPOSIT') {
       act(() => request(`/deposits/${targetId}/reject`, { method: 'POST', body: JSON.stringify({ reason: reason || 'Deposit rejected' }) }), 'Deposit rejected.');
+    } else if (targetType === 'LOAN') {
+      act(() => request(`/loans/${targetId}/reject`, { method: 'POST', body: JSON.stringify({ reason: reason || 'Loan rejected' }) }), 'Loan rejected.');
     }
     setRejectionModal({ open: false, targetId: null, targetType: 'TRANSACTION', reason: '' });
   };
@@ -325,6 +474,7 @@ export default function App() {
         ['Account Applications', Wallet],
         ['Branch Accounts', Landmark],
         ['Deposit Requests', ArrowDownLeft],
+        ['Loan Approvals', Banknote],
         ['Transactions', Activity],
         ['Customer Complaints', AlertTriangle],
         ['Staff Monitoring', Users]
@@ -345,6 +495,7 @@ export default function App() {
     return [
       ['Overview', LayoutDashboard],
       ['My Accounts', Wallet],
+      ['Deposit Requests', ArrowDownLeft],
       ['Transfer Money', ArrowLeftRight],
       ['Beneficiaries', Users],
       ['Transactions', Activity],
@@ -376,6 +527,29 @@ export default function App() {
 
           {authError && <div className="notice error"><AlertTriangle size={16} />{authError}</div>}
           {authMessage && <div className="notice success"><CheckCircle2 size={16} />{authMessage}</div>}
+
+          {/* Google Sign In Section for Customers */}
+          {authMode !== 'BOOTSTRAP' && (
+            <div style={{ marginBottom: '16px' }}>
+              <div id="google-signin-btn-slot" style={{ display: 'flex', justifyContent: 'center', minHeight: '44px' }} />
+              <button
+                type="button"
+                className="google-btn"
+                style={{ marginTop: '8px' }}
+                onClick={() => setShowDirectGoogleModal(true)}
+                disabled={authBusy}
+              >
+                <svg width="18" height="18" viewBox="0 0 48 48">
+                  <path fill="#EA4335" d="M24 9.5c3.54 0 6.71 1.22 9.21 3.6l6.85-6.85C35.9 2.38 30.47 0 24 0 14.62 0 6.51 5.38 2.56 13.22l7.98 6.19C12.43 13.72 17.74 9.5 24 9.5z" />
+                  <path fill="#4285F4" d="M46.98 24.55c0-1.57-.15-3.09-.38-4.55H24v9.02h12.94c-.58 2.96-2.26 5.48-4.78 7.18l7.73 6c4.51-4.18 7.09-10.36 7.09-17.65z" />
+                  <path fill="#FBBC05" d="M10.53 28.59c-.48-1.45-.76-2.99-.76-4.59s.27-3.14.76-4.59l-7.98-6.19C.92 16.46 0 20.12 0 24c0 3.88.92 7.54 2.56 10.78l7.97-6.19z" />
+                  <path fill="#34A853" d="M24 48c6.48 0 11.93-2.13 15.89-5.81l-7.73-6c-2.15 1.45-4.92 2.3-8.16 2.3-6.26 0-11.57-4.22-13.47-9.91l-7.98 6.19C6.51 42.62 14.62 48 24 48z" />
+                </svg>
+                <span>Direct Google Account Sign-In</span>
+              </button>
+              <div className="auth-divider"><span>or continue with email &amp; password</span></div>
+            </div>
+          )}
 
           <form className="form" onSubmit={async (e) => {
             e.preventDefault();
@@ -455,6 +629,7 @@ export default function App() {
               <>
                 <button type="button" onClick={() => { setAuthMode('REGISTER'); setAuthError(''); }}>New customer? Register here</button>
                 <button type="button" onClick={() => { setAuthMode('BOOTSTRAP'); setAuthError(''); }}>System bootstrap</button>
+                <button type="button" onClick={() => setShowGoogleConfig(true)}>Configure Google OAuth</button>
               </>
             )}
             {authMode !== 'LOGIN' && (
@@ -475,6 +650,66 @@ export default function App() {
             </div>
           </div>
         </div>
+
+        {/* Direct Google Sign In Modal */}
+        {showDirectGoogleModal && (
+          <div className="modal-overlay" onClick={() => setShowDirectGoogleModal(false)}>
+            <div className="modal-card" onClick={e => e.stopPropagation()}>
+              <div className="modal-head">
+                <h3>Direct Google Sign-In</h3>
+                <button className="iconbtn" onClick={() => setShowDirectGoogleModal(false)}>×</button>
+              </div>
+              <p style={{ fontSize: '12px', color: '#64748b', marginBottom: '14px' }}>
+                Enter your Google email address to sign in or register instantly as a verified customer.
+              </p>
+              <form onSubmit={handleDirectGoogleLogin}>
+                <Field label="Google Email Address">
+                  <input
+                    type="email"
+                    required
+                    autoFocus
+                    placeholder="e.g. yourname@gmail.com"
+                    value={directGoogleEmail}
+                    onChange={e => setDirectGoogleEmail(e.target.value)}
+                  />
+                </Field>
+                <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '10px', marginTop: '16px' }}>
+                  <button type="button" className="secondary" onClick={() => setShowDirectGoogleModal(false)}>Cancel</button>
+                  <button type="submit" className="primary" disabled={authBusy}>Sign In with Google</button>
+                </div>
+              </form>
+            </div>
+          </div>
+        )}
+
+        {/* Google OAuth Client ID Configuration Modal */}
+        {showGoogleConfig && (
+          <div className="modal-overlay" onClick={() => setShowGoogleConfig(false)}>
+            <div className="modal-card" onClick={e => e.stopPropagation()}>
+              <div className="modal-head">
+                <h3>Google OAuth Web Client ID</h3>
+                <button className="iconbtn" onClick={() => setShowGoogleConfig(false)}>×</button>
+              </div>
+              <p style={{ fontSize: '12px', color: '#64748b', marginBottom: '14px' }}>
+                Configure your Google OAuth 2.0 Web Client ID to render the official one-tap button:
+              </p>
+              <form onSubmit={saveGoogleClientId}>
+                <Field label="Client ID">
+                  <input
+                    placeholder="e.g. 123456-abcdef.apps.googleusercontent.com"
+                    value={clientIdInput || googleClientId}
+                    onChange={e => setClientIdInput(e.target.value)}
+                    required
+                  />
+                </Field>
+                <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '10px', marginTop: '16px' }}>
+                  <button type="button" className="secondary" onClick={() => setShowGoogleConfig(false)}>Cancel</button>
+                  <button type="submit" className="primary">Save Configuration</button>
+                </div>
+              </form>
+            </div>
+          </div>
+        )}
       </div>
     );
   }
@@ -565,7 +800,7 @@ export default function App() {
               <div className="hero-copy">
                 <div className="hero-kicker"><span className="live-dot" /> {role} WORKSPACE</div>
                 <div className="hero-label">
-                  {role === 'CUSTOMER' ? 'Total available balance' : 'System Accounts Monitored'}
+                  {role === 'CUSTOMER' ? 'Total available balance' : 'Monitored Bank Accounts'}
                 </div>
                 <div className="hero-balance">
                   {role === 'CUSTOMER'
@@ -598,7 +833,7 @@ export default function App() {
               <div className="panel">
                 <div className="panel-head">
                   <div><h2>{role === 'CUSTOMER' ? 'Your accounts' : 'Branch Accounts'}</h2><p>Balances and status</p></div>
-                  <button className="textbtn" onClick={() => setTab(role === 'CUSTOMER' ? 'My Accounts' : 'Branch Accounts')}>View all <ChevronRight size={15} /></button>
+                  <button className="textbtn" onClick={() => setTab(role === 'CUSTOMER' ? 'My Accounts' : (isAdmin ? 'Customer Accounts' : 'Branch Accounts'))}>View all <ChevronRight size={15} /></button>
                 </div>
                 <div className="account-list">
                   {accounts.length === 0 && <Empty text="No active accounts found in this scope." />}
@@ -651,7 +886,7 @@ export default function App() {
         {isAdmin && tab === 'User Management' && (
           <>
             <div className="section-intro">
-              <div><h2>User & Identity Management</h2><p>Create Manager, Staff, and Customer logins; toggle active/inactive status; assign roles.</p></div>
+              <div><h2>User &amp; Identity Management</h2><p>Create Manager, Staff, and Customer logins; toggle active/inactive status; assign roles.</p></div>
               <span className="pill">{usersList.length} total users</span>
             </div>
             <div className="two-col">
@@ -683,7 +918,7 @@ export default function App() {
               </div>
 
               <div className="panel table-panel">
-                <div className="panel-head" style={{ padding: '16px 20px 0' }}><div><h2>All Registered Users</h2><p>Status toggle & role assignments</p></div></div>
+                <div className="panel-head" style={{ padding: '16px 20px 0' }}><div><h2>All Registered Users</h2><p>Status toggle &amp; role assignments</p></div></div>
                 <div className="table-scroll">
                   <table>
                     <thead>
@@ -720,7 +955,7 @@ export default function App() {
         {isAdmin && tab === 'System Policies' && (
           <>
             <div className="section-intro">
-              <div><h2>System Configuration & Policy Thresholds</h2><p>Configure transaction limits, approval thresholds, and banking rules.</p></div>
+              <div><h2>System Configuration &amp; Policy Thresholds</h2><p>Configure transaction limits, approval thresholds, and banking rules.</p></div>
             </div>
             <div className="two-col">
               <div className="panel">
@@ -828,10 +1063,42 @@ export default function App() {
           </>
         )}
 
+        {isManager && tab === 'Staff Monitoring' && (
+          <>
+            <div className="section-intro">
+              <div><h2>Branch Staff Monitoring</h2><p>View active banking staff officers, branch assignments, and permissions.</p></div>
+              <span className="pill">{usersList.filter(u => u.role === 'STAFF' || u.role === 'EMPLOYEE').length} staff officers</span>
+            </div>
+            <div className="panel table-panel">
+              <div className="table-scroll">
+                <table>
+                  <thead>
+                    <tr><th>Staff Name</th><th>Email</th><th>Assigned Branch</th><th>Status</th><th>Registered Since</th></tr>
+                  </thead>
+                  <tbody>
+                    {usersList.filter(u => u.role === 'STAFF' || u.role === 'EMPLOYEE').map(s => (
+                      <tr key={s.id}>
+                        <td><b>{s.fullName}</b></td>
+                        <td>{s.email}</td>
+                        <td>{s.branch || 'Main Branch'}</td>
+                        <td><span className={statusClass(s.status)}>{s.status}</span></td>
+                        <td>{fmtDate(s.createdAt)}</td>
+                      </tr>
+                    ))}
+                    {usersList.filter(u => u.role === 'STAFF' || u.role === 'EMPLOYEE').length === 0 && (
+                      <tr><td colSpan={5} style={{ textAlign: 'center', padding: '32px' }}>No staff accounts registered in this branch yet.</td></tr>
+                    )}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          </>
+        )}
+
         {isManager && tab === 'Customer Complaints' && (
           <>
             <div className="section-intro">
-              <div><h2>Customer Support & Escalations</h2><p>Review customer service inquiries and resolve escalated branch complaints.</p></div>
+              <div><h2>Customer Support &amp; Escalations</h2><p>Review customer service inquiries and resolve escalated branch complaints.</p></div>
               <span className="pill">{complaints.length} tickets</span>
             </div>
             <div className="panel table-panel">
@@ -870,11 +1137,11 @@ export default function App() {
         {isStaff && tab === 'Customer Onboarding' && (
           <>
             <div className="section-intro">
-              <div><h2>Customer Registration & Onboarding</h2><p>Assisted customer registration and initial account opening application.</p></div>
+              <div><h2>Customer Registration &amp; Onboarding</h2><p>Assisted customer registration and initial account opening application.</p></div>
             </div>
             <div className="two-col">
               <div className="panel">
-                <div className="panel-head"><div><h2>Register New Customer</h2><p>Creates identity & prepares application</p></div></div>
+                <div className="panel-head"><div><h2>Register New Customer</h2><p>Creates identity &amp; prepares application</p></div></div>
                 <form className="form" onSubmit={e => {
                   e.preventDefault();
                   act(() => request('/staff/customer-registration', { method: 'POST', body: JSON.stringify(staffOnboard) }), 'Customer registered and verified! Manager approval required to activate.').then(() => {
@@ -897,7 +1164,7 @@ export default function App() {
                   <Field label="Initial Deposit (₹)">
                     <input type="number" min="1000" value={staffOnboard.initialDeposit} onChange={e => setStaffOnboard({ ...staffOnboard, initialDeposit: e.target.value })} required />
                   </Field>
-                  <button className="primary" disabled={busy}>Register & Submit Verification <UserPlus size={16} /></button>
+                  <button className="primary" disabled={busy}>Register &amp; Submit Verification <UserPlus size={16} /></button>
                 </form>
               </div>
 
@@ -976,7 +1243,10 @@ export default function App() {
                         <td>{b.bank_name}</td>
                         <td><span className={statusClass(b.status)}>{b.status}</span></td>
                         <td>
-                          <button className="reject" onClick={() => act(() => request(`/beneficiaries/${b.id}`, { method: 'DELETE' }), 'Beneficiary removed.')}>Remove</button>
+                          <div className="queue-actions">
+                            <button className="approve" onClick={() => { setTransfer({ ...transfer, destinationAccountId: b.account_number }); setTab('Transfer Money'); }}>Transfer</button>
+                            <button className="reject" onClick={() => act(() => request(`/beneficiaries/${b.id}`, { method: 'DELETE' }), 'Beneficiary removed.')}>Remove</button>
+                          </div>
                         </td>
                       </tr>
                     ))}
@@ -1048,7 +1318,7 @@ export default function App() {
         {role === 'CUSTOMER' && tab === 'Help & Support' && (
           <>
             <div className="section-intro">
-              <div><h2>Customer Support & Helpdesk</h2><p>Submit service inquiries or complaints and track resolution status.</p></div>
+              <div><h2>Customer Support &amp; Helpdesk</h2><p>Submit service inquiries or complaints and track resolution status.</p></div>
               <button className="primary" onClick={() => setComplaintModal(true)}>Submit New Complaint</button>
             </div>
             <div className="panel table-panel">
@@ -1079,7 +1349,7 @@ export default function App() {
         {role === 'CUSTOMER' && tab === 'Notifications' && (
           <>
             <div className="section-intro">
-              <div><h2>Security & Account Notifications</h2><p>Real-time transaction alerts, transfer approvals, and one-time codes.</p></div>
+              <div><h2>Security &amp; Account Notifications</h2><p>Real-time transaction alerts, transfer approvals, and one-time codes.</p></div>
               <button className="secondary" onClick={() => act(() => request('/notifications/read-all', { method: 'POST' }), 'All marked as read.')}>Mark all read</button>
             </div>
             <div className="panel">
@@ -1107,7 +1377,14 @@ export default function App() {
           <>
             <div className="section-intro">
               <div><h2>All Accounts &amp; Applications</h2><p>View balances, policies, and submit applications.</p></div>
-              <button className="secondary" onClick={load}><RefreshCw size={15} /> Refresh</button>
+              <div style={{ display: 'flex', gap: '8px' }}>
+                {role === 'CUSTOMER' && (
+                  <button className="primary" onClick={() => setShowNewApp(!showNewApp)}>
+                    <Plus size={15} /> {showNewApp ? 'Hide Application Form' : 'Apply for New Account'}
+                  </button>
+                )}
+                <button className="secondary" onClick={load}><RefreshCw size={15} /> Refresh</button>
+              </div>
             </div>
             <div className="panel" style={{ marginBottom: '24px' }}>
               <div className="panel-head">
@@ -1133,7 +1410,40 @@ export default function App() {
               </div>
             </div>
 
-            {role === 'CUSTOMER' && (
+            {/* Applications under review for Customer */}
+            {role === 'CUSTOMER' && apps.length > 0 && (
+              <div className="panel" style={{ marginBottom: '24px' }}>
+                <div className="panel-head">
+                  <div><h2>Your Submitted Applications</h2><p>Track verification and activation progress</p></div>
+                  <span className="count-bubble">{apps.length}</span>
+                </div>
+                <div className="table-scroll">
+                  <table>
+                    <thead>
+                      <tr><th>Product</th><th>Initial Deposit</th><th>Status</th><th>Submitted</th><th>Review Stage</th></tr>
+                    </thead>
+                    <tbody>
+                      {apps.map(ap => (
+                        <tr key={ap.id}>
+                          <td><b>{ap.account_type} Account</b><small>{ap.reason}</small></td>
+                          <td>{money(ap.initial_deposit)}</td>
+                          <td><span className={statusClass(ap.status)}>{ap.status}</span></td>
+                          <td>{fmtDate(ap.created_at)}</td>
+                          <td>
+                            {ap.status === 'PENDING_REVIEW' && <span className="muted">Stage 1: Awaiting Staff KYC verification</span>}
+                            {ap.status === 'VERIFIED' && <span className="muted">Stage 2: Staff verified; awaiting Manager approval</span>}
+                            {ap.status === 'APPROVED' && <span className="status success">Activated (Account #{ap.account_id})</span>}
+                            {ap.status === 'REJECTED' && <span className="status failed">Application rejected</span>}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            )}
+
+            {role === 'CUSTOMER' && (showNewApp || accounts.length === 0) && (
               <div className="two-col">
                 <div className="panel">
                   <div className="panel-head"><div><h2>Open a new account</h2><p>Submit for multi-tier verification</p></div></div>
@@ -1245,13 +1555,22 @@ export default function App() {
               </div>
 
               <div className="panel">
-                <div className="panel-head"><div><h2>Pending Deposit Approvals</h2><p>Review queue</p></div></div>
-                {txns.filter(t => t.txn_type === 'DEPOSIT' && t.status === 'PENDING_APPROVAL').map(t => (
+                <div className="panel-head">
+                  <div>
+                    <h2>{isStaff ? 'Pending Deposit Approvals' : 'My Deposit History'}</h2>
+                    <p>{isStaff ? 'Review queue for customer deposits' : 'Track status of your submitted deposits'}</p>
+                  </div>
+                </div>
+                {(isStaff 
+                  ? txns.filter(t => t.txn_type === 'DEPOSIT' && t.status === 'PENDING_APPROVAL')
+                  : txns.filter(t => t.txn_type === 'DEPOSIT')
+                ).map(t => (
                   <div className="queue-row" key={t.id}>
                     <div>
                       <b>{money(t.amount)} deposit</b>
                       <small>{t.reference_no} · Account #{t.destination_account_id}</small>
                       <small>{fmtDate(t.created_at)}</small>
+                      {t.rejection_reason && <small style={{ color: '#ef4444' }}>Reason: {t.rejection_reason}</small>}
                     </div>
                     {isStaff ? (
                       <div className="queue-actions">
@@ -1263,7 +1582,10 @@ export default function App() {
                     )}
                   </div>
                 ))}
-                {txns.filter(t => t.txn_type === 'DEPOSIT' && t.status === 'PENDING_APPROVAL').length === 0 && <Empty text="No deposits awaiting approval." />}
+                {(isStaff 
+                  ? txns.filter(t => t.txn_type === 'DEPOSIT' && t.status === 'PENDING_APPROVAL')
+                  : txns.filter(t => t.txn_type === 'DEPOSIT')
+                ).length === 0 && <Empty text={isStaff ? "No deposits awaiting approval." : "No deposits submitted yet."} />}
               </div>
             </div>
           </>
@@ -1328,7 +1650,7 @@ export default function App() {
               <div className="panel">
                 <div className="panel-head"><div><h2>Saga Orchestration Rules</h2><p>Consistent distributed transactions</p></div></div>
                 <div className="saga-steps">
-                  <Step n="01" title="Validate Ownership & Balance" text="Account ownership, minimum balance, and daily limits checked." />
+                  <Step n="01" title="Validate Ownership &amp; Balance" text="Account ownership, minimum balance, and daily limits checked." />
                   <Step n="02" title="Approval Threshold Evaluation" text="Transfers above policy threshold are held for Manager signoff." />
                   <Step n="03" title="Atomic Source Debit" text="Source funds debited with idempotency protection." />
                   <Step n="04" title="Destination Credit" text="Recipient account credited in the ledger." />
@@ -1457,7 +1779,7 @@ export default function App() {
                     <select value={transfer.demoOutcome} onChange={e => setTransfer({ ...transfer, demoOutcome: e.target.value })}>
                       <option value="SUCCESS">Success — Debit and credit confirmed</option>
                       <option value="FAIL_CREDIT_COMPENSATE">Destination credit fails — Saga compensation succeeds</option>
-                      <option value="FAIL_CREDIT_REVIEW">Destination credit & compensation fail — Escalates to REQUIRES_REVIEW</option>
+                      <option value="FAIL_CREDIT_REVIEW">Destination credit &amp; compensation fail — Escalates to REQUIRES_REVIEW</option>
                     </select>
                   </Field>
                   <button className="primary" disabled={busy || accounts.length === 0 || !transfer.sourceAccountId || !transfer.destinationAccountId.trim()}>
@@ -1538,36 +1860,38 @@ export default function App() {
           </>
         )}
 
-        {/* Loans Tab */}
-        {tab === 'Loans' && (
+        {/* Loans Tab & Loan Approvals for Manager */}
+        {(tab === 'Loans' || tab === 'Loan Approvals') && (
           <>
             <div className="section-intro">
-              <div><h2>Loan Applications</h2><p>Submit a loan request; branch manager reviews it before disbursement.</p></div>
+              <div><h2>Loan Applications &amp; Review</h2><p>Submit a loan request or review and disburse loan funds.</p></div>
             </div>
             <div className="two-col">
-              <div className="panel">
-                <div className="panel-head"><div><h2>Apply for Loan</h2><p>Educational loan product</p></div></div>
-                <form className="form" onSubmit={e => {
-                  e.preventDefault();
-                  act(() => request('/loans', { method: 'POST', body: JSON.stringify({ accountId: Number(loanForm.accountId), amount: Number(loanForm.amount), purpose: loanForm.purpose, monthlyIncome: Number(loanForm.monthlyIncome) }) }), 'Loan application submitted for review.').then(() => {
-                    setLoanForm({ accountId: '', amount: '', purpose: '', monthlyIncome: '' });
-                  });
-                }}>
-                  <Field label="Credit destination account">
-                    <select value={loanForm.accountId} onChange={e => setLoanForm({ ...loanForm, accountId: e.target.value })} required>
-                      <option value="">Select account</option>
-                      {accounts.filter(a => a.owner_user_id === user?.id).map(a => <option key={a.id} value={a.id}>{a.account_number}</option>)}
-                    </select>
-                  </Field>
-                  <Field label="Loan Amount (₹5,000–₹10,00,000)"><input type="number" min="5000" max="1000000" value={loanForm.amount} onChange={e => setLoanForm({ ...loanForm, amount: e.target.value })} required /></Field>
-                  <Field label="Monthly Income (₹)"><input type="number" min="1" value={loanForm.monthlyIncome} onChange={e => setLoanForm({ ...loanForm, monthlyIncome: e.target.value })} required /></Field>
-                  <Field label="Detailed Purpose"><input minLength={10} value={loanForm.purpose} onChange={e => setLoanForm({ ...loanForm, purpose: e.target.value })} placeholder="Education, home improvement..." required /></Field>
-                  <button className="primary" disabled={busy || !loanForm.accountId}>Submit Loan Application <ChevronRight size={16} /></button>
-                </form>
-              </div>
+              {role === 'CUSTOMER' && (
+                <div className="panel">
+                  <div className="panel-head"><div><h2>Apply for Loan</h2><p>Educational loan product</p></div></div>
+                  <form className="form" onSubmit={e => {
+                    e.preventDefault();
+                    act(() => request('/loans', { method: 'POST', body: JSON.stringify({ accountId: Number(loanForm.accountId), amount: Number(loanForm.amount), purpose: loanForm.purpose, monthlyIncome: Number(loanForm.monthlyIncome) }) }), 'Loan application submitted for review.').then(() => {
+                      setLoanForm({ accountId: '', amount: '', purpose: '', monthlyIncome: '' });
+                    });
+                  }}>
+                    <Field label="Credit destination account">
+                      <select value={loanForm.accountId} onChange={e => setLoanForm({ ...loanForm, accountId: e.target.value })} required>
+                        <option value="">Select account</option>
+                        {accounts.filter(a => a.owner_user_id === user?.id).map(a => <option key={a.id} value={a.id}>{a.account_number}</option>)}
+                      </select>
+                    </Field>
+                    <Field label="Loan Amount (₹5,000–₹10,00,000)"><input type="number" min="5000" max="1000000" value={loanForm.amount} onChange={e => setLoanForm({ ...loanForm, amount: e.target.value })} required /></Field>
+                    <Field label="Monthly Income (₹)"><input type="number" min="1" value={loanForm.monthlyIncome} onChange={e => setLoanForm({ ...loanForm, monthlyIncome: e.target.value })} required /></Field>
+                    <Field label="Detailed Purpose"><input minLength={10} value={loanForm.purpose} onChange={e => setLoanForm({ ...loanForm, purpose: e.target.value })} placeholder="Education, home improvement..." required /></Field>
+                    <button className="primary" disabled={busy || !loanForm.accountId}>Submit Loan Application <ChevronRight size={16} /></button>
+                  </form>
+                </div>
+              )}
 
-              <div className="panel table-panel">
-                <div className="panel-head" style={{ padding: '16px 20px 0' }}><div><h2>Loan Applications</h2><p>Approval status</p></div></div>
+              <div className="panel table-panel" style={{ gridColumn: role === 'CUSTOMER' ? 'auto' : '1 / -1' }}>
+                <div className="panel-head" style={{ padding: '16px 20px 0' }}><div><h2>Loan Applications Queue</h2><p>Approval status</p></div></div>
                 <div className="table-scroll">
                   <table>
                     <thead>
@@ -1583,8 +1907,8 @@ export default function App() {
                           <td>
                             {isManager && l.status === 'PENDING_REVIEW' && (
                               <div className="queue-actions">
-                                <button className="approve" disabled={busy} onClick={() => act(() => request(`/loans/${l.id}/approve`, { method: 'POST', body: JSON.stringify({ reason: 'Approved by Branch Manager' }) }), 'Loan approved & disbursed.')}>Approve</button>
-                                <button className="reject" disabled={busy} onClick={() => act(() => request(`/loans/${l.id}/reject`, { method: 'POST', body: JSON.stringify({ reason: 'Did not meet requirements' }) }), 'Loan rejected.')}>Reject</button>
+                                <button className="approve" disabled={busy} onClick={() => act(() => request(`/loans/${l.id}/approve`, { method: 'POST', body: JSON.stringify({ reason: 'Approved by Branch Manager' }) }), 'Loan approved & disbursed.')}>Approve &amp; Disburse</button>
+                                <button className="reject" disabled={busy} onClick={() => setRejectionModal({ open: true, targetId: l.id, targetType: 'LOAN', reason: '' })}>Reject</button>
                               </div>
                             )}
                           </td>

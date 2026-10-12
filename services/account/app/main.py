@@ -570,7 +570,7 @@ async def account_statement(account_number: str, u = Depends(current)):
         'minimumBalance': acc['minimum_balance'],
         'totalDebits': total_debits,
         'totalCredits': total_credits,
-        'generatedAt': datetime.datetime.now().isoformat(),
+        'generatedAt': datetime.datetime.now(datetime.timezone.utc).isoformat(),
         'transactions': transactions
     }
 
