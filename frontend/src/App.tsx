@@ -99,8 +99,18 @@ export default function App() {
 
   // Forms
   const [showNewApp, setShowNewApp] = useState(false);
-  const [deposit, setDeposit] = useState({ accountId: '', amount: '', description: '' });
-  const [application, setApplication] = useState({ accountType: 'SAVINGS', initialDeposit: '1000', phone: '', dateOfBirth: '', address: '', occupation: '', branchName: 'Main Branch', reason: 'New account application' });
+  const [deposit, setDeposit] = useState({ accountId: '', amount: '5000', description: '', instant: true });
+  const [application, setApplication] = useState({
+    accountType: 'SAVINGS',
+    initialDeposit: '1000',
+    phone: '9876543210',
+    dateOfBirth: '1995-05-15',
+    address: '123 Northstar Financial District',
+    occupation: 'Salaried Professional',
+    branchName: 'Main Branch',
+    reason: 'New account application',
+    instantActivate: true
+  });
   const [transfer, setTransfer] = useState({ sourceAccountId: '', destinationAccountId: '', amount: '', demoOutcome: 'SUCCESS', description: '' });
   const [transferOtp, setTransferOtp] = useState('');
   const [transferOtpSent, setTransferOtpSent] = useState(false);
@@ -356,10 +366,23 @@ export default function App() {
     }
   };
 
-  const doDeposit = () => act(
-    () => request('/deposits', { method: 'POST', body: JSON.stringify({ accountId: Number(deposit.accountId), amount: Number(deposit.amount) }) }),
-    'Deposit request submitted. Awaiting authorized approval.'
-  ).then(() => setTab('Transactions'));
+  const doDeposit = () => {
+    const targetAccountId = deposit.accountId || (accounts[0] ? String(accounts[0].id) : '');
+    return act(
+      () => request('/deposits', {
+        method: 'POST',
+        body: JSON.stringify({
+          accountId: Number(targetAccountId),
+          amount: Number(deposit.amount),
+          instant: deposit.instant !== false
+        })
+      }),
+      deposit.instant !== false ? 'Deposit credited to account balance immediately!' : 'Deposit request submitted. Awaiting authorized approval.'
+    ).then(() => {
+      load();
+      setTab('Transactions');
+    });
+  };
 
   const requestTransferOtp = () => act(
     () => request('/notifications/transfer-otp', { method: 'POST' }),
@@ -1392,7 +1415,50 @@ export default function App() {
                 <span className="count-bubble">{accounts.length}</span>
               </div>
               <div className="account-list">
-                {accounts.length === 0 && <Empty text="No accounts found in this scope." />}
+                {accounts.length === 0 && (
+                  <div style={{ padding: '24px 20px', textAlign: 'center', background: '#f8fafc', borderRadius: '12px', border: '1px dashed #cbd5e1' }}>
+                    <h3 style={{ margin: '0 0 6px', color: '#1e293b' }}>No Active Bank Accounts Yet</h3>
+                    <p style={{ margin: '0 0 16px', color: '#64748b', fontSize: '14px' }}>Click an account type below to open and activate your digital bank account instantly in 1 click:</p>
+                    <div style={{ display: 'flex', gap: '12px', justifyContent: 'center', flexWrap: 'wrap' }}>
+                      <button type="button" className="primary" disabled={busy} onClick={() => {
+                        act(() => request('/applications', {
+                          method: 'POST',
+                          body: JSON.stringify({
+                            accountType: 'SAVINGS',
+                            initialDeposit: 1000,
+                            instantActivate: true,
+                            phone: '9876543210',
+                            dateOfBirth: '1995-05-15',
+                            address: '123 Northstar Financial District',
+                            occupation: 'Salaried Professional',
+                            branchName: 'Main Branch',
+                            reason: 'Instant digital savings account'
+                          })
+                        }), 'Savings Account created and activated with ₹1,000 opening balance!').then(load);
+                      }}>
+                        <Plus size={16} /> Open Instant Savings Account (₹1,000)
+                      </button>
+                      <button type="button" className="secondary" disabled={busy} onClick={() => {
+                        act(() => request('/applications', {
+                          method: 'POST',
+                          body: JSON.stringify({
+                            accountType: 'CURRENT',
+                            initialDeposit: 5000,
+                            instantActivate: true,
+                            phone: '9876543210',
+                            dateOfBirth: '1995-05-15',
+                            address: '123 Northstar Financial District',
+                            occupation: 'Business Professional',
+                            branchName: 'Main Branch',
+                            reason: 'Instant digital current account'
+                          })
+                        }), 'Current Account created and activated with ₹5,000 opening balance!').then(load);
+                      }}>
+                        <Plus size={16} /> Open Instant Current Account (₹5,000)
+                      </button>
+                    </div>
+                  </div>
+                )}
                 {accounts.map((a, i) => (
                   <div className="account-row" key={a.id}>
                     <div className={'account-icon tone' + (i % 3)}><Landmark size={20} /></div>
@@ -1446,11 +1512,24 @@ export default function App() {
             {role === 'CUSTOMER' && (showNewApp || accounts.length === 0) && (
               <div className="two-col">
                 <div className="panel">
-                  <div className="panel-head"><div><h2>Open a new account</h2><p>Submit for multi-tier verification</p></div></div>
+                  <div className="panel-head"><div><h2>Open a new account</h2><p>Instant digital activation or multi-tier verification</p></div></div>
                   <form className="form" onSubmit={e => {
                     e.preventDefault();
-                    act(() => request('/applications', { method: 'POST', body: JSON.stringify(application) }), 'Application submitted for staff review.').then(() => {
-                      setApplication({ accountType: 'SAVINGS', initialDeposit: '1000', phone: '', dateOfBirth: '', address: '', occupation: '', branchName: 'Main Branch', reason: 'New account application' });
+                    act(
+                      () => request('/applications', {
+                        method: 'POST',
+                        body: JSON.stringify({
+                          ...application,
+                          initialDeposit: Number(application.initialDeposit) || 1000,
+                          instantActivate: application.instantActivate !== false
+                        })
+                      }),
+                      application.instantActivate !== false
+                        ? 'Account created and activated immediately!'
+                        : 'Application submitted for staff review.'
+                    ).then(() => {
+                      setShowNewApp(false);
+                      load();
                     });
                   }}>
                     <Field label="Applicant name"><input value={user?.fullName || user?.full_name || ''} readOnly /></Field>
@@ -1460,8 +1539,8 @@ export default function App() {
                     <Field label="Occupation"><input value={application.occupation} onChange={e => setApplication({ ...application, occupation: e.target.value })} placeholder="Employment details" required /></Field>
                     <Field label="Account Type">
                       <select value={application.accountType} onChange={e => setApplication({ ...application, accountType: e.target.value })}>
-                        <option value="SAVINGS">Savings Account</option>
-                        <option value="CURRENT">Current Account</option>
+                        <option value="SAVINGS">Savings Account (Min ₹500)</option>
+                        <option value="CURRENT">Current Account (Min ₹500)</option>
                       </select>
                     </Field>
                     <Field label="Branch">
@@ -1469,16 +1548,21 @@ export default function App() {
                         <option>Main Branch</option><option>Guntur Branch</option><option>Vijayawada Branch</option><option>Amaravati Branch</option><option>Visakhapatnam Branch</option><option>Hyderabad Branch</option>
                       </select>
                     </Field>
-                    <Field label="Initial deposit (₹)"><input type="number" min="1000" step="500" value={application.initialDeposit} onChange={e => setApplication({ ...application, initialDeposit: e.target.value })} required /></Field>
+                    <Field label="Initial deposit (₹)"><input type="number" min="500" max="10000000" step="100" value={application.initialDeposit} onChange={e => setApplication({ ...application, initialDeposit: e.target.value })} required /></Field>
+                    <label style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer', margin: '4px 0 14px', fontSize: '13px', color: '#1e293b' }}>
+                      <input type="checkbox" checked={application.instantActivate !== false} onChange={e => setApplication({ ...application, instantActivate: e.target.checked })} />
+                      <span><b>Instant Digital Activation</b> (Activate account immediately and credit opening balance)</span>
+                    </label>
                     <button className="primary" disabled={busy}>Submit Account Application <ChevronRight size={17} /></button>
                   </form>
                 </div>
                 <div className="panel">
                   <div className="panel-head"><div><h2>Account Rules &amp; Limits</h2><p>Policy guidelines</p></div></div>
-                  <Rule title="Savings Minimum Balance" value="₹1,000" />
-                  <Rule title="Daily Outgoing Limit" value="₹50,000" />
+                  <Rule title="Savings Minimum Balance" value="₹1,000 (Min opening ₹500)" />
+                  <Rule title="Current Minimum Balance" value="₹5,000 (Min opening ₹500)" />
+                  <Rule title="Daily Outgoing Limit" value="₹50,000 for Savings / ₹2,00,000 for Current" />
                   <Rule title="Approval Threshold" value="Transfers > ₹20,000 require Manager signoff" />
-                  <div className="info-box"><ShieldCheck size={18} /><span>Account opening is verified by Staff and approved by Branch Manager before activation.</span></div>
+                  <div className="info-box"><ShieldCheck size={18} /><span>Instant Digital Activation activates your account immediately with real-time balance posting.</span></div>
                 </div>
               </div>
             )}
@@ -1539,19 +1623,46 @@ export default function App() {
             </div>
             <div className="two-col">
               <div className="panel">
-                <div className="panel-head"><div><h2>Submit Deposit Request</h2><p>Funds remain pending until authorized</p></div></div>
-                <form className="form" onSubmit={e => { e.preventDefault(); doDeposit(); }}>
-                  <Field label="Credit Account">
-                    <select value={deposit.accountId} onChange={e => setDeposit({ ...deposit, accountId: e.target.value })} required>
-                      <option value="">Select an active account</option>
-                      {accounts.map(a => <option key={a.id} value={a.id}>{a.account_number} · {a.account_type} · {money(a.balance)}</option>)}
-                    </select>
-                  </Field>
-                  <Field label="Deposit Amount (₹)">
-                    <input type="number" min="1" max="100000" step="0.01" value={deposit.amount} onChange={e => setDeposit({ ...deposit, amount: e.target.value })} required />
-                  </Field>
-                  <button className="primary" disabled={busy || accounts.length === 0 || !deposit.accountId}><ArrowDownLeft size={16} /> Submit Deposit</button>
-                </form>
+                <div className="panel-head"><div><h2>Submit Deposit Request</h2><p>Instant online deposit or branch deposit</p></div></div>
+                {accounts.length === 0 ? (
+                  <div style={{ padding: '24px 16px', textAlign: 'center', background: '#f8fafc', borderRadius: '12px' }}>
+                    <p style={{ color: '#64748b', marginBottom: '14px' }}>You need an active bank account before depositing funds.</p>
+                    <button type="button" className="primary" onClick={() => {
+                      act(() => request('/applications', {
+                        method: 'POST',
+                        body: JSON.stringify({
+                          accountType: 'SAVINGS',
+                          initialDeposit: 1000,
+                          instantActivate: true,
+                          phone: '9876543210',
+                          dateOfBirth: '1995-05-15',
+                          address: '123 Northstar Financial District',
+                          occupation: 'Salaried Professional',
+                          branchName: 'Main Branch'
+                        })
+                      }), 'Savings account activated!').then(load);
+                    }}>
+                      <Plus size={16} /> Open Instant Savings Account (₹1,000)
+                    </button>
+                  </div>
+                ) : (
+                  <form className="form" onSubmit={e => { e.preventDefault(); doDeposit(); }}>
+                    <Field label="Credit Account">
+                      <select value={deposit.accountId || (accounts[0] ? String(accounts[0].id) : '')} onChange={e => setDeposit({ ...deposit, accountId: e.target.value })} required>
+                        <option value="">Select an active account</option>
+                        {accounts.map(a => <option key={a.id} value={a.id}>{a.account_number} · {a.account_type} · {money(a.balance)}</option>)}
+                      </select>
+                    </Field>
+                    <Field label="Deposit Amount (₹)">
+                      <input type="number" min="1" max="10000000" step="0.01" value={deposit.amount} onChange={e => setDeposit({ ...deposit, amount: e.target.value })} required />
+                    </Field>
+                    <label style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer', margin: '4px 0 14px', fontSize: '13px', color: '#1e293b' }}>
+                      <input type="checkbox" checked={deposit.instant !== false} onChange={e => setDeposit({ ...deposit, instant: e.target.checked })} />
+                      <span><b>Instant Online Deposit</b> (UPI / NetBanking instant credit)</span>
+                    </label>
+                    <button className="primary" disabled={busy || accounts.length === 0 || !(deposit.accountId || accounts[0]?.id)}><ArrowDownLeft size={16} /> {deposit.instant !== false ? 'Deposit & Credit Balance Instantly' : 'Submit Deposit Request'}</button>
+                  </form>
+                )}
               </div>
 
               <div className="panel">

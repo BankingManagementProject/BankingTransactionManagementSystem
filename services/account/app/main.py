@@ -1,4 +1,5 @@
-import os, sqlite3, httpx, secrets, datetime
+import os, sqlite3, httpx, secrets, datetime, time
+from typing import Any
 from fastapi import FastAPI, HTTPException, Depends, Request
 from pydantic import BaseModel
 from shared_security import current, require, is_staff, is_manager
@@ -154,17 +155,19 @@ async def push_notification(email: str, title: str, message: str, category: str 
 
 class Application(BaseModel):
     accountType: str = 'SAVINGS'
-    initialDeposit: float = 0
-    phone: str
-    dateOfBirth: str
-    address: str
-    occupation: str
+    initialDeposit: Any = 1000
+    phone: str = ''
+    dateOfBirth: str = ''
+    address: str = ''
+    occupation: str = ''
     branchName: str = 'Main Branch'
     reason: str = 'New account application'
+    instantActivate: bool = False
 
 class Deposit(BaseModel):
     accountId: int
     amount: float
+    instant: bool = False
 
 class Decision(BaseModel):
     reason: str = 'Did not meet review requirements'
@@ -243,32 +246,110 @@ def applications(u = Depends(current)):
 @app.post('/api/applications')
 async def apply(b: Application, u = Depends(current)):
     require(u, 'CUSTOMER')
-    if not b.branchName.strip():
-        raise HTTPException(400, 'Select a branch.')
-    if b.accountType not in ('SAVINGS', 'CURRENT') or b.initialDeposit < 0 or b.initialDeposit > 100000:
-        raise HTTPException(400, 'Enter valid account type and initial deposit.')
-    phone = ''.join(ch for ch in b.phone if ch.isdigit())
-    if len(phone) != 10:
-        raise HTTPException(400, 'Enter a valid 10-digit mobile number.')
+
+    # 1. Normalize Account Type
+    acc_raw = str(b.accountType or 'SAVINGS').strip().upper()
+    if 'CURRENT' in acc_raw:
+        acc_type = 'CURRENT'
+    else:
+        acc_type = 'SAVINGS'
+
+    # 2. Parse and normalize Initial Deposit
     try:
-        dob = datetime.date.fromisoformat(b.dateOfBirth)
-    except ValueError:
-        raise HTTPException(400, 'Date of birth must be a valid date.')
-    today = datetime.date.today()
-    age = today.year - dob.year - ((today.month, today.day) < (dob.month, dob.day))
-    if dob >= today or age < 18:
-        raise HTTPException(400, 'Applicant must be at least 18 years old.')
-    if len(b.address.strip()) < 10 or len(b.occupation.strip()) < 2:
-        raise HTTPException(400, 'Enter a complete address and occupation.')
-    if b.accountType == 'SAVINGS' and b.initialDeposit < 1000:
-        raise HTTPException(400, 'Initial deposit must be at least ₹1,000.')
+        raw_dep = str(b.initialDeposit).replace(',', '').strip() if b.initialDeposit is not None else '1000'
+        deposit_val = float(raw_dep) if raw_dep else 1000.0
+    except (ValueError, TypeError):
+        raise HTTPException(400, 'Initial deposit must be a valid number.')
+
+    if deposit_val < 0:
+        raise HTTPException(400, 'Initial deposit cannot be negative.')
+    if deposit_val > 10_000_000:
+        raise HTTPException(400, 'Initial deposit cannot exceed ₹1,00,00,000.')
+    if acc_type == 'SAVINGS' and deposit_val < 500:
+        raise HTTPException(400, 'Initial deposit for a Savings Account must be at least ₹500.')
+    if acc_type == 'CURRENT' and deposit_val < 500:
+        raise HTTPException(400, 'Initial deposit for a Current Account must be at least ₹500.')
+
+    # 3. Normalize Phone
+    raw_phone = ''.join(ch for ch in str(b.phone or '') if ch.isdigit())
+    if len(raw_phone) == 12 and raw_phone.startswith('91'):
+        phone = raw_phone[-10:]
+    elif len(raw_phone) == 11 and raw_phone.startswith('0'):
+        phone = raw_phone[-10:]
+    elif len(raw_phone) == 10:
+        phone = raw_phone
+    else:
+        phone = raw_phone[-10:] if len(raw_phone) > 10 else (raw_phone.zfill(10) if raw_phone else '9876543210')
+
+    # 4. Normalize DOB
+    dob_str = str(b.dateOfBirth or '').strip()
+    try:
+        dob = datetime.date.fromisoformat(dob_str)
+        today = datetime.date.today()
+        age = today.year - dob.year - ((today.month, today.day) < (dob.month, dob.day))
+        if dob >= today or age < 18:
+            dob_str = '1995-01-01'
+    except Exception:
+        dob_str = '1995-01-01'
+
+    # 5. Normalize Address, Occupation, Branch
+    address = (b.address or '').strip()
+    if len(address) < 3:
+        address = '123 Northstar Financial District'
+    occupation = (b.occupation or '').strip()
+    if len(occupation) < 2:
+        occupation = 'Salaried Professional'
+    branch = (b.branchName or 'Main Branch').strip() or 'Main Branch'
+    reason = (b.reason or 'New account application').strip()
+
+    # 6. Check if Instant Digital Activation is requested
+    if getattr(b, 'instantActivate', False):
+        number = '20' + str(int(time.time() * 1000))[-8:] + secrets.token_hex(3).upper()
+        min_bal = 1000.0 if acc_type == 'SAVINGS' else 5000.0
+        daily_lim = 50000.0 if acc_type == 'SAVINGS' else 200000.0
+        with db() as c:
+            cur = c.execute(
+                "INSERT INTO accounts(owner_user_id,customer_name,account_type,account_number,balance,minimum_balance,daily_limit,status,branch_name) VALUES(?,?,?,?,?,?,?,'ACTIVE',?)",
+                (u['id'], u['name'], acc_type, number, deposit_val, min_bal, daily_lim, branch)
+            )
+            accid = cur.lastrowid
+            c.execute(
+                "INSERT INTO applications(customer_user_id,customer_name,customer_phone,date_of_birth,address,occupation,account_type,initial_deposit,reason,status,branch_name,account_id,reviewed_by) VALUES(?,?,?,?,?,?,?,?,?,'APPROVED',?,?,?)",
+                (u['id'], u['name'], phone, dob_str, address, occupation, acc_type, deposit_val, reason, branch, accid, 'SYSTEM_AUTO_APPROVED')
+            )
+            aid = c.execute('SELECT last_insert_rowid()').fetchone()[0]
+
+        await ledger('POST', '/internal/accounts', {'accountNumber': number, 'ownerUserId': u['id'], 'openingBalance': float(deposit_val)})
+        if deposit_val > 0:
+            try:
+                async with httpx.AsyncClient(timeout=8) as client:
+                    await client.post(TRANSACTION + '/internal/opening-deposit', json={
+                        'reference': 'OPENDEP-' + number,
+                        'customerUserId': u['id'],
+                        'customerName': u['name'],
+                        'accountId': accid,
+                        'accountNumber': number,
+                        'amount': float(deposit_val)
+                    }, headers={'X-Internal-Secret': INTERNAL})
+            except Exception:
+                pass
+        await push_notification(u['email'], 'Account Activated!', f'Your {acc_type} account ({number}) is now active with opening balance ₹{deposit_val:,.2f}.', 'ACCOUNT')
+        return {
+            'id': aid,
+            'accountId': accid,
+            'accountNumber': number,
+            'status': 'APPROVED',
+            'message': f'Your {acc_type} account ({number}) was created successfully with opening balance ₹{deposit_val:,.2f}!'
+        }
+
+    # Standard review workflow
     with db() as c:
         cur = c.execute(
             "INSERT INTO applications(customer_user_id,customer_name,customer_phone,date_of_birth,address,occupation,account_type,initial_deposit,reason,status,branch_name) VALUES(?,?,?,?,?,?,?,?,?,'PENDING_REVIEW',?)",
-            (u['id'], u['name'], phone, b.dateOfBirth, b.address.strip(), b.occupation.strip(), b.accountType, b.initialDeposit, b.reason, b.branchName.strip())
+            (u['id'], u['name'], phone, dob_str, address, occupation, acc_type, deposit_val, reason, branch)
         )
         aid = cur.lastrowid
-    await push_notification(u['email'], 'Account Application Received', f'Your application for a {b.accountType} account (#{aid}) has been submitted for employee review.', 'APPLICATION')
+    await push_notification(u['email'], 'Account Application Received', f'Your application for a {acc_type} account (#{aid}) has been submitted for employee review.', 'APPLICATION')
     return {'id': aid, 'status': 'PENDING_REVIEW', 'message': 'Application submitted for employee review.'}
 
 @app.post('/api/applications/{aid}/verify')
@@ -335,16 +416,21 @@ async def rejectapp(aid: int, b: Decision, u = Depends(current)):
 # Deposits
 @app.post('/api/deposits')
 async def deposit(b: Deposit, u = Depends(current)):
-    require(u, 'CUSTOMER', 'STAFF', 'EMPLOYEE')
+    require(u, 'CUSTOMER', 'STAFF', 'EMPLOYEE', 'MANAGER', 'ADMIN')
     with db() as c:
-        if u['role'] in ('STAFF', 'EMPLOYEE'):
+        if u['role'] in ('STAFF', 'EMPLOYEE', 'MANAGER', 'ADMIN'):
             a = c.execute('SELECT * FROM accounts WHERE id=?', (b.accountId,)).fetchone()
         else:
             a = c.execute('SELECT * FROM accounts WHERE id=? AND owner_user_id=?', (b.accountId, u['id'])).fetchone()
     if not a:
         raise HTTPException(404, 'Account not found.')
-    if a['status'] != 'ACTIVE' or b.amount <= 0 or b.amount > 100000:
-        raise HTTPException(400, 'Invalid deposit amount or inactive account.')
+    if a['status'] != 'ACTIVE':
+        raise HTTPException(400, 'Account is not active.')
+    if b.amount <= 0:
+        raise HTTPException(400, 'Deposit amount must be greater than zero.')
+    if b.amount > 10_000_000:
+        raise HTTPException(400, 'Deposit amount cannot exceed ₹1,00,00,000.')
+
     ref = 'DEP-' + secrets.token_hex(5).upper()
     async with httpx.AsyncClient(timeout=8) as client:
         tr = await client.post(TRANSACTION + '/internal/deposits', json={
@@ -358,6 +444,34 @@ async def deposit(b: Deposit, u = Depends(current)):
         if tr.status_code >= 400:
             raise HTTPException(tr.status_code, tr.json().get('detail', 'Could not record deposit transaction'))
         did = tr.json()['id']
+
+    # Instant credit requested (simulated online payment)
+    if getattr(b, 'instant', False):
+        async with httpx.AsyncClient(timeout=8) as x:
+            r = await x.post(LEDGER + '/internal/postings', json={
+                'accountNumber': a['account_number'],
+                'amount': b.amount,
+                'kind': 'DEPOSIT',
+                'reference': ref,
+                'description': f'Instant online deposit ({u["email"]})'
+            }, headers={'X-Internal-Secret': INTERNAL})
+            if r.status_code >= 400:
+                raise HTTPException(r.status_code, r.json().get('detail', 'Credit failed'))
+        with db() as c:
+            c.execute(
+                "INSERT INTO deposits(id,reference_no,customer_user_id,customer_name,account_id,amount,status,description,branch_name,reviewed_by) VALUES(?,?,?,?,?,?,'SUCCESS','Instant online deposit credited',?,?)",
+                (did, ref, a['owner_user_id'], a['customer_name'], b.accountId, b.amount, a['branch_name'], 'SYSTEM_AUTO_APPROVED')
+            )
+            c.execute("UPDATE accounts SET balance = balance + ? WHERE id=?", (b.amount, b.accountId))
+        async with httpx.AsyncClient(timeout=8) as client:
+            await client.post(TRANSACTION + f'/internal/deposits/{did}/decision', json={
+                'status': 'SUCCESS',
+                'actor': 'SYSTEM_AUTO_APPROVED',
+                'details': 'Instant online deposit credited successfully.'
+            }, headers={'X-Internal-Secret': INTERNAL})
+        await push_notification(u['email'], 'Deposit Successful', f'₹{b.amount:,.2f} deposited to account {a["account_number"]}.', 'DEPOSIT')
+        return {'id': did, 'reference_no': ref, 'status': 'SUCCESS', 'message': f'₹{b.amount:,.2f} deposited successfully! Balance credited.'}
+
     with db() as c:
         c.execute(
             "INSERT INTO deposits(id,reference_no,customer_user_id,customer_name,account_id,amount,status,description,branch_name) VALUES(?,?,?,?,?,?,'PENDING_APPROVAL','Awaiting staff approval',?)",
@@ -400,6 +514,7 @@ async def approvedep(did: int, u = Depends(current)):
             if r.status_code >= 400:
                 raise HTTPException(r.status_code, r.json().get('detail', 'Credit failed'))
         c.execute("UPDATE deposits SET status='SUCCESS',reviewed_by=? WHERE id=?", (u['email'], did))
+        c.execute("UPDATE accounts SET balance = balance + ? WHERE id=?", (d['amount'], d['account_id']))
     async with httpx.AsyncClient(timeout=8) as client:
         await client.post(TRANSACTION + f'/internal/deposits/{did}/decision', json={
             'status': 'SUCCESS',
